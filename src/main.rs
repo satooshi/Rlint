@@ -247,7 +247,13 @@ fn main() {
     }
 
     // First lint pass
-    let all_diags = lint_files(&files, &linter, &effective_select, &effective_ignore, cli.errors_only);
+    let all_diags = lint_files(
+        &files,
+        &linter,
+        &effective_select,
+        &effective_ignore,
+        cli.errors_only,
+    );
 
     // Apply fixes when --fix is requested
     let mut total_fixed = 0usize;
@@ -263,7 +269,13 @@ fn main() {
     // When fixes were applied, re-lint the modified files to show accurate post-fix state.
     // Otherwise use the first-pass results directly.
     let display_diags = if cli.fix && total_fixed > 0 {
-        lint_files(&files, &linter, &effective_select, &effective_ignore, cli.errors_only)
+        lint_files(
+            &files,
+            &linter,
+            &effective_select,
+            &effective_ignore,
+            cli.errors_only,
+        )
     } else {
         all_diags
     };
