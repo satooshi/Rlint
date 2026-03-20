@@ -6,6 +6,12 @@ pub struct Linter {
     rules: Vec<Box<dyn crate::rules::Rule + Send + Sync>>,
 }
 
+impl Default for Linter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Linter {
     pub fn new() -> Self {
         Linter { rules: all_rules() }
@@ -22,7 +28,9 @@ impl Linter {
             tokens: &tokens,
         };
 
-        let mut diags: Vec<Diagnostic> = self.rules.iter()
+        let mut diags: Vec<Diagnostic> = self
+            .rules
+            .iter()
             .flat_map(|rule| rule.check(&ctx))
             .collect();
 

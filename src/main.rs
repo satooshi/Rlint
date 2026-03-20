@@ -1,16 +1,10 @@
-mod lexer;
-mod diagnostic;
-mod rules;
-mod linter;
-mod reporter;
-
-use std::time::Instant;
 use clap::{Parser, ValueEnum};
 use rayon::prelude::*;
+use std::time::Instant;
 use walkdir::WalkDir;
 
-use linter::Linter;
-use reporter::{OutputFormat, Reporter};
+use rlint::linter::Linter;
+use rlint::reporter::{OutputFormat, Reporter};
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Format {
@@ -102,8 +96,11 @@ fn collect_ruby_files(paths: &[String]) -> Vec<String> {
                     if p.is_file() {
                         let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
                         let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                        if ext == "rb" || name == "Gemfile" || name == "Rakefile"
-                            || name.ends_with(".gemspec") || name == "Guardfile"
+                        if ext == "rb"
+                            || name == "Gemfile"
+                            || name == "Rakefile"
+                            || name.ends_with(".gemspec")
+                            || name == "Guardfile"
                         {
                             files.push(p.to_string_lossy().into_owned());
                         }
@@ -122,17 +119,24 @@ fn main() {
     let start = Instant::now();
 
     let format = match cli.format {
-        Format::Text   => OutputFormat::Text,
-        Format::Json   => OutputFormat::Json,
+        Format::Text => OutputFormat::Text,
+        Format::Json => OutputFormat::Json,
         Format::Github => OutputFormat::Github,
     };
 
-    let reporter = Reporter { format, show_fixes: cli.fix };
+    let reporter = Reporter {
+        format,
+        show_fixes: cli.fix,
+    };
     let linter = Linter::new();
 
-    let selected: Option<Vec<String>> = cli.select.as_deref()
+    let selected: Option<Vec<String>> = cli
+        .select
+        .as_deref()
         .map(|s| s.split(',').map(|r| r.to_string()).collect());
-    let ignored: Option<Vec<String>> = cli.ignore.as_deref()
+    let ignored: Option<Vec<String>> = cli
+        .ignore
+        .as_deref()
         .map(|s| s.split(',').map(|r| r.to_string()).collect());
 
     let files = collect_ruby_files(&cli.paths);
@@ -142,7 +146,8 @@ fn main() {
     }
 
     // Lint files in parallel
-    let all_diags: Vec<(String, Vec<crate::diagnostic::Diagnostic>)> = files.par_iter()
+    let all_diags: Vec<(String, Vec<rlint::diagnostic::Diagnostic>)> = files
+        .par_iter()
         .filter_map(|path| {
             let source = std::fs::read_to_string(path).ok()?;
             let mut diags = linter.lint_file(path, &source);
@@ -150,12 +155,16 @@ fn main() {
             // Apply rule filters
             diags.retain(|d| {
                 if let Some(sel) = &selected {
-                    if !sel.iter().any(|r| d.rule.starts_with(r.as_str())) { return false; }
+                    if !sel.iter().any(|r| d.rule.starts_with(r.as_str())) {
+                        return false;
+                    }
                 }
                 if let Some(ign) = &ignored {
-                    if ign.iter().any(|r| d.rule.starts_with(r.as_str())) { return false; }
+                    if ign.iter().any(|r| d.rule.starts_with(r.as_str())) {
+                        return false;
+                    }
                 }
-                if cli.errors_only && d.severity != crate::diagnostic::Severity::Error {
+                if cli.errors_only && d.severity != rlint::diagnostic::Severity::Error {
                     return false;
                 }
                 true
@@ -165,7 +174,8 @@ fn main() {
         })
         .collect();
 
-    let mut flat_diags: Vec<crate::diagnostic::Diagnostic> = all_diags.iter()
+    let mut flat_diags: Vec<rlint::diagnostic::Diagnostic> = all_diags
+        .iter()
         .flat_map(|(_, d)| d.iter())
         .cloned()
         .collect();
@@ -180,12 +190,16 @@ fn main() {
         print_statistics(&flat_diags);
     }
 
-    if !cli.no_fail && flat_diags.iter().any(|d| d.severity == crate::diagnostic::Severity::Error) {
+    if !cli.no_fail
+        && flat_diags
+            .iter()
+            .any(|d| d.severity == rlint::diagnostic::Severity::Error)
+    {
         std::process::exit(1);
     }
 }
 
-fn print_statistics(diags: &[crate::diagnostic::Diagnostic]) {
+fn print_statistics(diags: &[rlint::diagnostic::Diagnostic]) {
     use std::collections::HashMap;
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for d in diags {

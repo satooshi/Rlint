@@ -1,22 +1,22 @@
-mod line_length;
-mod trailing_whitespace;
+mod complexity;
 mod frozen_string_literal;
+mod line_length;
 mod missing_frozen_literal;
 mod naming;
 mod style;
 mod syntax;
-mod complexity;
+mod trailing_whitespace;
 
 use crate::diagnostic::Diagnostic;
 use crate::lexer::Token;
 
-pub use line_length::LineLengthRule;
-pub use trailing_whitespace::TrailingWhitespaceRule;
+pub use complexity::ComplexityRule;
 pub use frozen_string_literal::FrozenStringLiteralRule;
+pub use line_length::LineLengthRule;
 pub use naming::NamingRule;
 pub use style::StyleRule;
 pub use syntax::SyntaxRule;
-pub use complexity::ComplexityRule;
+pub use trailing_whitespace::TrailingWhitespaceRule;
 
 /// Context passed to each rule
 pub struct LintContext<'a> {
