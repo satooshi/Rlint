@@ -137,9 +137,14 @@ fn collect_ruby_files(paths: &[String], exclude: &[String]) -> Vec<String> {
 fn is_excluded(path: &str, patterns: &[String]) -> bool {
     let path = std::path::Path::new(path);
     for pattern in patterns {
-        if let Ok(p) = glob::Pattern::new(pattern) {
-            if p.matches_path(path) {
-                return true;
+        match glob::Pattern::new(pattern) {
+            Ok(p) => {
+                if p.matches_path(path) {
+                    return true;
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning: invalid exclude glob pattern '{}': {}", pattern, e);
             }
         }
     }
@@ -293,7 +298,7 @@ fn main() {
     reporter.print_summary(&flat_diags, files.len(), elapsed);
 
     if cli.fix && total_fixed > 0 {
-        println!("Fixed {} violation(s).", total_fixed);
+        eprintln!("Fixed {} violation(s).", total_fixed);
     }
 
     if cli.statistics {

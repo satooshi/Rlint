@@ -6,12 +6,23 @@ use crate::diagnostic::{Diagnostic, FixKind};
 /// - `FixKind::ReplaceLine`: replace the text of the diagnostic's line (1-based) with the fix string
 /// - `FixKind::InsertBefore`: insert the fix string as a new line before the diagnostic's line
 ///
-/// Multiple fixes on the same line are deduplicated (only the first fix per line is applied).
+/// Fixes are deduplicated per `FixKind`: at most one `ReplaceLine` and one `InsertBefore` fix
+/// are applied per line (first-wins within each kind), so both kinds can apply to the same line.
 /// Fixes are applied in reverse-line order to preserve 1-based line numbers during insertions.
-/// Original line endings (LF or CRLF) are preserved.
+/// Original line endings (LF or CRLF) are detected from the first newline and preserved.
 pub fn apply_fixes(source: &str, diags: &[Diagnostic]) -> String {
     let ends_with_newline = source.ends_with('\n');
-    let uses_crlf = source.contains("\r\n");
+    // Detect line ending style from the first actual newline in the file.
+    let bytes = source.as_bytes();
+    let mut uses_crlf = false;
+    for i in 0..bytes.len() {
+        if bytes[i] == b'\n' {
+            if i > 0 && bytes[i - 1] == b'\r' {
+                uses_crlf = true;
+            }
+            break;
+        }
+    }
     let line_ending = if uses_crlf { "\r\n" } else { "\n" };
     // str::lines() strips both \n and \r\n, so line content is always clean.
     let mut lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
@@ -82,6 +93,10 @@ pub fn fix_file(path: &str, diags: &[Diagnostic]) -> std::io::Result<usize> {
 
     let tmp_path = format!("{}.rlint_tmp", path);
     std::fs::write(&tmp_path, &fixed)?;
+    // Preserve original file permissions on the temp file before renaming.
+    if let Ok(meta) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(&tmp_path, meta.permissions());
+    }
     if let Err(e) = std::fs::rename(&tmp_path, path) {
         let _ = std::fs::remove_file(&tmp_path);
         return Err(e);

@@ -4,9 +4,9 @@ use crate::lexer::TokenKind;
 
 /// Complexity rules
 pub struct ComplexityRule {
-    pub max_method_lines: usize,
-    pub max_class_lines: usize,
-    pub max_complexity: usize,
+    pub(crate) max_method_lines: usize,
+    pub(crate) max_class_lines: usize,
+    pub(crate) max_complexity: usize,
 }
 
 impl Default for ComplexityRule {
