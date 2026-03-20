@@ -3,10 +3,21 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::lexer::TokenKind;
 
 /// Complexity rules
-pub struct ComplexityRule;
+pub struct ComplexityRule {
+    pub max_method_lines: usize,
+    pub max_class_lines: usize,
+    pub max_complexity: usize,
+}
 
-const MAX_METHOD_LINES: usize = 30;
-const MAX_CLASS_LINES: usize = 300;
+impl Default for ComplexityRule {
+    fn default() -> Self {
+        ComplexityRule {
+            max_method_lines: 30,
+            max_class_lines: 300,
+            max_complexity: 10,
+        }
+    }
+}
 
 impl Rule for ComplexityRule {
     fn name(&self) -> &'static str {
@@ -54,7 +65,7 @@ impl Rule for ComplexityRule {
                 if j <= tokens.len() {
                     let end_line = tokens[j.saturating_sub(1)].line;
                     let method_lines = end_line.saturating_sub(def_line) + 1;
-                    if method_lines > MAX_METHOD_LINES {
+                    if method_lines > self.max_method_lines {
                         diags.push(Diagnostic::new(
                             ctx.file,
                             def_line,
@@ -62,7 +73,7 @@ impl Rule for ComplexityRule {
                             "R040",
                             format!(
                                 "Method `{}` is too long ({} lines, max {})",
-                                name, method_lines, MAX_METHOD_LINES
+                                name, method_lines, self.max_method_lines
                             ),
                             Severity::Warning,
                         ));
@@ -102,7 +113,7 @@ impl Rule for ComplexityRule {
                 if j <= tokens.len() {
                     let end_line = tokens[j.saturating_sub(1)].line;
                     let class_lines = end_line.saturating_sub(class_line) + 1;
-                    if class_lines > MAX_CLASS_LINES {
+                    if class_lines > self.max_class_lines {
                         diags.push(Diagnostic::new(
                             ctx.file,
                             class_line,
@@ -110,7 +121,7 @@ impl Rule for ComplexityRule {
                             "R041",
                             format!(
                                 "Class `{}` is too long ({} lines, max {})",
-                                name, class_lines, MAX_CLASS_LINES
+                                name, class_lines, self.max_class_lines
                             ),
                             Severity::Warning,
                         ));
@@ -173,7 +184,7 @@ impl Rule for ComplexityRule {
                     j += 1;
                 }
 
-                if complexity > 10 {
+                if complexity > self.max_complexity {
                     diags.push(Diagnostic::new(
                         ctx.file,
                         def_line,
@@ -208,7 +219,7 @@ mod tests {
             lines: &lines,
             tokens: &tokens,
         };
-        ComplexityRule.check(&ctx)
+        ComplexityRule::default().check(&ctx)
     }
 
     fn has_rule(diags: &[Diagnostic], rule: &str) -> bool {

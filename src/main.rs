@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use std::time::Instant;
 use walkdir::WalkDir;
 
+use rlint::config::Config;
 use rlint::linter::Linter;
 use rlint::reporter::{OutputFormat, Reporter};
 
@@ -24,6 +25,18 @@ Rlint — Ruff for Ruby
 A fast, opinionated Ruby linter inspired by Ruff (Python).
 Checks your Ruby code for style issues, naming conventions,
 complexity problems, and common mistakes.
+
+Configuration:
+  Create a .rlint.toml in your project root to customize settings:
+
+    line-length = 100
+    max-method-lines = 40
+    ignore = [\"R003\"]
+
+Inline suppression:
+  # rlint:disable-next-line R001
+  # rlint:disable R001,R002
+  # rlint:enable R001,R002
 
 Rules:
   R001  Line too long
@@ -54,7 +67,7 @@ struct Cli {
     #[arg(long, short, value_enum, default_value = "text")]
     format: Format,
 
-    /// Show auto-fix suggestions
+    /// Apply auto-fix suggestions to files
     #[arg(long)]
     fix: bool,
 
@@ -79,13 +92,15 @@ struct Cli {
     statistics: bool,
 }
 
-fn collect_ruby_files(paths: &[String]) -> Vec<String> {
+fn collect_ruby_files(paths: &[String], exclude: &[String]) -> Vec<String> {
     let mut files = Vec::new();
     for path in paths {
         let meta = std::fs::metadata(path);
         if let Ok(m) = meta {
             if m.is_file() {
-                files.push(path.clone());
+                if !is_excluded(path, exclude) {
+                    files.push(path.clone());
+                }
             } else {
                 for entry in WalkDir::new(path)
                     .follow_links(true)
@@ -102,7 +117,10 @@ fn collect_ruby_files(paths: &[String]) -> Vec<String> {
                             || name.ends_with(".gemspec")
                             || name == "Guardfile"
                         {
-                            files.push(p.to_string_lossy().into_owned());
+                            let path_str = p.to_string_lossy().into_owned();
+                            if !is_excluded(&path_str, exclude) {
+                                files.push(path_str);
+                            }
                         }
                     }
                 }
@@ -114,9 +132,57 @@ fn collect_ruby_files(paths: &[String]) -> Vec<String> {
     files
 }
 
+/// Returns true if the path matches any exclude glob pattern.
+fn is_excluded(path: &str, patterns: &[String]) -> bool {
+    for pattern in patterns {
+        if let Ok(p) = glob::Pattern::new(pattern) {
+            if p.matches(path) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn main() {
     let cli = Cli::parse();
     let start = Instant::now();
+
+    // Load config from .rlint.toml (walk up from CWD)
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mut config = Config::load(&cwd);
+
+    // CLI flags override config file values
+    // --select overrides config.select entirely
+    let selected: Option<Vec<String>> = cli.select.as_deref().map(|s| {
+        s.split(',')
+            .map(|r| r.trim().to_string())
+            .filter(|r| !r.is_empty())
+            .collect()
+    });
+
+    // --ignore appends to config.ignore
+    if let Some(ign_str) = &cli.ignore {
+        let extra: Vec<String> = ign_str
+            .split(',')
+            .map(|r| r.trim().to_string())
+            .filter(|r| !r.is_empty())
+            .collect();
+        config.ignore.extend(extra);
+    }
+
+    let effective_select = selected.or_else(|| {
+        if config.select.is_empty() {
+            None
+        } else {
+            Some(config.select.clone())
+        }
+    });
+    let effective_ignore = if config.ignore.is_empty() {
+        None
+    } else {
+        Some(config.ignore.clone())
+    };
 
     let format = match cli.format {
         Format::Text => OutputFormat::Text,
@@ -126,20 +192,11 @@ fn main() {
 
     let reporter = Reporter {
         format,
-        show_fixes: cli.fix,
+        show_fixes: !cli.fix, // when --fix is active, don't clutter output with fix hints
     };
-    let linter = Linter::new();
+    let linter = Linter::with_config(&config);
 
-    let selected: Option<Vec<String>> = cli
-        .select
-        .as_deref()
-        .map(|s| s.split(',').map(|r| r.to_string()).collect());
-    let ignored: Option<Vec<String>> = cli
-        .ignore
-        .as_deref()
-        .map(|s| s.split(',').map(|r| r.to_string()).collect());
-
-    let files = collect_ruby_files(&cli.paths);
+    let files = collect_ruby_files(&cli.paths, &config.exclude);
     if files.is_empty() {
         eprintln!("No Ruby files found.");
         return;
@@ -154,12 +211,12 @@ fn main() {
 
             // Apply rule filters
             diags.retain(|d| {
-                if let Some(sel) = &selected {
+                if let Some(sel) = &effective_select {
                     if !sel.iter().any(|r| d.rule.starts_with(r.as_str())) {
                         return false;
                     }
                 }
-                if let Some(ign) = &ignored {
+                if let Some(ign) = &effective_ignore {
                     if ign.iter().any(|r| d.rule.starts_with(r.as_str())) {
                         return false;
                     }
@@ -174,9 +231,22 @@ fn main() {
         })
         .collect();
 
+    // Apply fixes when --fix is requested
+    let mut total_fixed = 0usize;
+    if cli.fix {
+        for (path, diags) in &all_diags {
+            match rlint::fixer::fix_file(path, diags) {
+                Ok(n) => total_fixed += n,
+                Err(e) => eprintln!("Warning: could not fix {}: {}", path, e),
+            }
+        }
+    }
+
+    // Build flat display list: exclude fixed violations when --fix was applied
     let mut flat_diags: Vec<rlint::diagnostic::Diagnostic> = all_diags
         .iter()
         .flat_map(|(_, d)| d.iter())
+        .filter(|d| !(cli.fix && d.fix.is_some()))
         .cloned()
         .collect();
     flat_diags.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
@@ -185,6 +255,10 @@ fn main() {
 
     let elapsed = start.elapsed().as_millis();
     reporter.print_summary(&flat_diags, files.len(), elapsed);
+
+    if cli.fix && total_fixed > 0 {
+        println!("Fixed {} violation(s).", total_fixed);
+    }
 
     if cli.statistics {
         print_statistics(&flat_diags);

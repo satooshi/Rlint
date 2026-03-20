@@ -31,7 +31,7 @@ impl Rule for FrozenStringLiteralRule {
                 "Missing `# frozen_string_literal: true` magic comment",
                 Severity::Warning,
             )
-            .with_fix("# frozen_string_literal: true".to_string())]
+            .with_insert_before_fix("# frozen_string_literal: true")]
         } else {
             vec![]
         }
