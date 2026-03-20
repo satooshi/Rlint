@@ -37,7 +37,7 @@ Configuration:
 Inline suppression:
   # rlint:disable-next-line R001
   # rlint:disable R001,R002
-  # rlint:enable               (re-enables all; scoped enable not yet supported)
+  # rlint:enable               (re-enables all or specific rules)
 
 Rules:
   R001  Line too long

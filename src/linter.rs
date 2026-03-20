@@ -109,14 +109,46 @@ fn apply_suppressions(diags: &mut Vec<Diagnostic>, tokens: &[crate::lexer::Token
                 start: next_line,
                 end: next_line,
             });
-        } else if text.strip_prefix("rlint:enable").is_some() {
-            // rlint:enable closes the nearest open disable block (scoped re-enable not yet supported)
-            if let Some((rules, start)) = active.take() {
-                suppressions.push(Suppression {
-                    rules,
-                    start,
-                    end: token.line.saturating_sub(1),
-                });
+        } else if let Some(rest) = text.strip_prefix("rlint:enable") {
+            let enable_rules = parse_rule_list(rest.trim());
+            if let Some((active_rules, start)) = active.take() {
+                let end = token.line.saturating_sub(1);
+                match (enable_rules, active_rules) {
+                    // rlint:enable (no rules) → close the entire active block
+                    (None, ar) => {
+                        suppressions.push(Suppression {
+                            rules: ar,
+                            start,
+                            end,
+                        });
+                    }
+                    // rlint:enable Rxx but active block suppresses all → close the block
+                    (Some(_), None) => {
+                        suppressions.push(Suppression {
+                            rules: None,
+                            start,
+                            end,
+                        });
+                    }
+                    // rlint:enable R001 with rlint:disable R001,R002 → partial close
+                    (Some(en_rules), Some(ac_rules)) => {
+                        // Close the entire original block up to the enable line.
+                        suppressions.push(Suppression {
+                            rules: Some(ac_rules.clone()),
+                            start,
+                            end,
+                        });
+                        // Re-open only the rules that were NOT enabled.
+                        let remaining: Vec<String> = ac_rules
+                            .iter()
+                            .filter(|r| !en_rules.contains(*r))
+                            .cloned()
+                            .collect();
+                        if !remaining.is_empty() {
+                            active = Some((Some(remaining), token.line + 1));
+                        }
+                    }
+                }
             }
         } else if let Some(rest) = text.strip_prefix("rlint:disable") {
             // Close any previously open block before starting a new one
@@ -198,6 +230,29 @@ mod tests {
         let r002: Vec<_> = diags.iter().filter(|d| d.rule == "R002").collect();
         assert_eq!(r002.len(), 1, "only line 6 should have R002: {r002:?}");
         assert_eq!(r002[0].line, 6);
+    }
+
+    #[test]
+    fn enable_selective_rules_keeps_others_suppressed() {
+        // disable R001 and R002, then enable only R002
+        // → R002 fires after enable; R001 remains suppressed throughout
+        let long_line = "x".repeat(130);
+        let source = format!(
+            concat!(
+                "# frozen_string_literal: true\n",
+                "# rlint:disable R001,R002\n",
+                "{line}   \n", // line 3: both suppressed
+                "# rlint:enable R002\n",
+                "{line}   \n", // line 5: R002 fires, R001 still suppressed
+            ),
+            line = long_line
+        );
+        let diags = Linter::new().lint_file("test.rb", &source);
+        let r002: Vec<_> = diags.iter().filter(|d| d.rule == "R002").collect();
+        let r001: Vec<_> = diags.iter().filter(|d| d.rule == "R001").collect();
+        assert_eq!(r002.len(), 1, "R002 should fire only on line 5: {r002:?}");
+        assert_eq!(r002[0].line, 5);
+        assert_eq!(r001.len(), 0, "R001 should remain suppressed: {r001:?}");
     }
 
     #[test]

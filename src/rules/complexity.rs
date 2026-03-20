@@ -191,8 +191,8 @@ impl Rule for ComplexityRule {
                         tokens[i].col,
                         "R042",
                         format!(
-                            "Method `{}` has high cyclomatic complexity ({})",
-                            name, complexity
+                            "Method `{}` has high cyclomatic complexity ({}, max {})",
+                            name, complexity, self.max_complexity
                         ),
                         Severity::Warning,
                     ));

@@ -99,16 +99,21 @@ pub fn fix_file(path: &str, diags: &[Diagnostic]) -> std::io::Result<usize> {
     }
     if let Err(e) = std::fs::rename(&tmp_path, path) {
         // On Unix, rename() over an existing file is atomic and should succeed.
-        // On Windows it fails with AlreadyExists — remove the destination and retry.
+        // On Windows it fails with AlreadyExists — use a backup-and-replace strategy
+        // to avoid a window where the file doesn't exist.
         if e.kind() == std::io::ErrorKind::AlreadyExists {
-            if let Err(remove_err) = std::fs::remove_file(path) {
+            let bak_path = format!("{}.rlint_bak", path);
+            if let Err(bak_err) = std::fs::rename(path, &bak_path) {
                 let _ = std::fs::remove_file(&tmp_path);
-                return Err(remove_err);
+                return Err(bak_err);
             }
             if let Err(retry_err) = std::fs::rename(&tmp_path, path) {
+                // Restore original from backup.
+                let _ = std::fs::rename(&bak_path, path);
                 let _ = std::fs::remove_file(&tmp_path);
                 return Err(retry_err);
             }
+            let _ = std::fs::remove_file(&bak_path);
         } else {
             let _ = std::fs::remove_file(&tmp_path);
             return Err(e);
