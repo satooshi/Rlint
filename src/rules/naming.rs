@@ -1,0 +1,127 @@
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::lexer::TokenKind;
+use super::{LintContext, Rule};
+
+/// R010 - Naming convention rules
+pub struct NamingRule;
+
+fn is_snake_case(s: &str) -> bool {
+    // Strip trailing ? or !
+    let s = s.trim_end_matches(['?', '!']);
+    s.chars().all(|c| c.is_lowercase() || c.is_ascii_digit() || c == '_')
+        && !s.starts_with('_')
+        || s == "_"
+}
+
+#[allow(dead_code)]
+fn is_screaming_snake_case(s: &str) -> bool {
+    s.chars().all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+impl Rule for NamingRule {
+    fn name(&self) -> &'static str { "R010" }
+
+    fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
+        let mut diags = Vec::new();
+        let tokens = ctx.tokens;
+        let mut i = 0;
+
+        while i < tokens.len() {
+            let tok = &tokens[i];
+
+            // Method names should be snake_case: `def foo_bar`
+            if tok.kind == TokenKind::Def {
+                if let Some(name_tok) = tokens.get(i + 1)
+                    .or_else(|| tokens.get(i + 2)) // skip whitespace
+                {
+                    let name_tok = if name_tok.kind == TokenKind::Whitespace {
+                        tokens.get(i + 2)
+                    } else {
+                        Some(name_tok)
+                    };
+
+                    if let Some(name_tok) = name_tok {
+                        if name_tok.kind == TokenKind::Ident
+                            && !is_snake_case(&name_tok.text)
+                        {
+                            diags.push(Diagnostic::new(
+                                ctx.file,
+                                name_tok.line,
+                                name_tok.col,
+                                "R010",
+                                format!(
+                                    "Method name `{}` should use snake_case",
+                                    name_tok.text
+                                ),
+                                Severity::Warning,
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // Constants: all-caps or CamelCase is fine; warn if lowercase constant
+            if tok.kind == TokenKind::Constant {
+                // If it looks like a class/module name (CamelCase) - OK
+                // If it's ALL_CAPS - OK
+                // If it has lowercase after first char but is not CamelCase - warn
+                let name = &tok.text;
+                let first_upper = name.chars().next().map_or(false, |c| c.is_uppercase());
+                if !first_upper {
+                    diags.push(Diagnostic::new(
+                        ctx.file,
+                        tok.line,
+                        tok.col,
+                        "R011",
+                        format!("Constant `{}` should start with uppercase", name),
+                        Severity::Error,
+                    ));
+                }
+            }
+
+            i += 1;
+        }
+
+        // Check variable names in assignment context (simple: look for `ident =`)
+        let mut i = 0;
+        while i + 2 < tokens.len() {
+            let tok = &tokens[i];
+            let next = &tokens[i + 1];
+            let _eq = &tokens[i + 2];
+
+            // Skip whitespace token between ident and =
+            let (name_tok, eq_tok) = if next.kind == TokenKind::Whitespace {
+                (tok, &tokens[i + 2])
+            } else {
+                (tok, next)
+            };
+
+            if name_tok.kind == TokenKind::Ident
+                && eq_tok.kind == TokenKind::Eq
+                && !name_tok.text.starts_with('_')
+            {
+                let name = &name_tok.text;
+                // Check for camelCase variable names
+                if name.chars().next().map_or(false, |c| c.is_lowercase())
+                    && name.chars().any(|c| c.is_uppercase())
+                {
+                    diags.push(Diagnostic::new(
+                        ctx.file,
+                        name_tok.line,
+                        name_tok.col,
+                        "R012",
+                        format!("Variable `{}` should use snake_case instead of camelCase", name),
+                        Severity::Warning,
+                    ));
+                }
+            }
+
+            i += 1;
+        }
+
+        // Check screaming snake case for module-level constants (heuristic)
+        // e.g. `MAX_SIZE = 100` is fine, `maxSize = 100` is warned above
+
+        diags
+    }
+}
