@@ -1,6 +1,6 @@
+use super::{LintContext, Rule};
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::lexer::TokenKind;
-use super::{LintContext, Rule};
 
 /// R010 - Naming convention rules
 pub struct NamingRule;
@@ -8,18 +8,22 @@ pub struct NamingRule;
 fn is_snake_case(s: &str) -> bool {
     // Strip trailing ? or !
     let s = s.trim_end_matches(['?', '!']);
-    s.chars().all(|c| c.is_lowercase() || c.is_ascii_digit() || c == '_')
+    s.chars()
+        .all(|c| c.is_lowercase() || c.is_ascii_digit() || c == '_')
         && !s.starts_with('_')
         || s == "_"
 }
 
 #[allow(dead_code)]
 fn is_screaming_snake_case(s: &str) -> bool {
-    s.chars().all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_')
+    s.chars()
+        .all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
 impl Rule for NamingRule {
-    fn name(&self) -> &'static str { "R010" }
+    fn name(&self) -> &'static str {
+        "R010"
+    }
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
         let mut diags = Vec::new();
@@ -31,8 +35,8 @@ impl Rule for NamingRule {
 
             // Method names should be snake_case: `def foo_bar`
             if tok.kind == TokenKind::Def {
-                if let Some(name_tok) = tokens.get(i + 1)
-                    .or_else(|| tokens.get(i + 2)) // skip whitespace
+                if let Some(name_tok) = tokens.get(i + 1).or_else(|| tokens.get(i + 2))
+                // skip whitespace
                 {
                     let name_tok = if name_tok.kind == TokenKind::Whitespace {
                         tokens.get(i + 2)
@@ -41,18 +45,13 @@ impl Rule for NamingRule {
                     };
 
                     if let Some(name_tok) = name_tok {
-                        if name_tok.kind == TokenKind::Ident
-                            && !is_snake_case(&name_tok.text)
-                        {
+                        if name_tok.kind == TokenKind::Ident && !is_snake_case(&name_tok.text) {
                             diags.push(Diagnostic::new(
                                 ctx.file,
                                 name_tok.line,
                                 name_tok.col,
                                 "R010",
-                                format!(
-                                    "Method name `{}` should use snake_case",
-                                    name_tok.text
-                                ),
+                                format!("Method name `{}` should use snake_case", name_tok.text),
                                 Severity::Warning,
                             ));
                         }
@@ -66,7 +65,7 @@ impl Rule for NamingRule {
                 // If it's ALL_CAPS - OK
                 // If it has lowercase after first char but is not CamelCase - warn
                 let name = &tok.text;
-                let first_upper = name.chars().next().map_or(false, |c| c.is_uppercase());
+                let first_upper = name.chars().next().is_some_and(|c| c.is_uppercase());
                 if !first_upper {
                     diags.push(Diagnostic::new(
                         ctx.file,
@@ -102,7 +101,7 @@ impl Rule for NamingRule {
             {
                 let name = &name_tok.text;
                 // Check for camelCase variable names
-                if name.chars().next().map_or(false, |c| c.is_lowercase())
+                if name.chars().next().is_some_and(|c| c.is_lowercase())
                     && name.chars().any(|c| c.is_uppercase())
                 {
                     diags.push(Diagnostic::new(
@@ -110,7 +109,10 @@ impl Rule for NamingRule {
                         name_tok.line,
                         name_tok.col,
                         "R012",
-                        format!("Variable `{}` should use snake_case instead of camelCase", name),
+                        format!(
+                            "Variable `{}` should use snake_case instead of camelCase",
+                            name
+                        ),
                         Severity::Warning,
                     ));
                 }
@@ -134,7 +136,12 @@ mod tests {
     fn check(source: &str) -> Vec<Diagnostic> {
         let lines: Vec<&str> = source.lines().collect();
         let tokens = Lexer::new(source).tokenize();
-        let ctx = LintContext { file: "test.rb", source, lines: &lines, tokens: &tokens };
+        let ctx = LintContext {
+            file: "test.rb",
+            source,
+            lines: &lines,
+            tokens: &tokens,
+        };
         NamingRule.check(&ctx)
     }
 
@@ -201,7 +208,10 @@ mod tests {
     #[test]
     fn violation_message_mentions_variable_name() {
         let diags = check("fooBar = 42");
-        let r012 = diags.iter().find(|d| d.rule == "R012").expect("R012 expected");
+        let r012 = diags
+            .iter()
+            .find(|d| d.rule == "R012")
+            .expect("R012 expected");
         assert!(r012.message.contains("fooBar"));
     }
 }

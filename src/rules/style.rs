@@ -1,12 +1,14 @@
+use super::{LintContext, Rule};
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::lexer::TokenKind;
-use super::{LintContext, Rule};
 
 /// Style rules: spacing, semicolons, parentheses, etc.
 pub struct StyleRule;
 
 impl Rule for StyleRule {
-    fn name(&self) -> &'static str { "R020" }
+    fn name(&self) -> &'static str {
+        "R020"
+    }
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
         let mut diags = Vec::new();
@@ -34,9 +36,18 @@ impl Rule for StyleRule {
 
             let is_binary_op = matches!(
                 tok.kind,
-                TokenKind::EqEq | TokenKind::NotEq | TokenKind::Lt | TokenKind::Gt
-                | TokenKind::LtEq | TokenKind::GtEq | TokenKind::And2 | TokenKind::Or2
-                | TokenKind::Plus | TokenKind::Minus | TokenKind::Star | TokenKind::Slash
+                TokenKind::EqEq
+                    | TokenKind::NotEq
+                    | TokenKind::Lt
+                    | TokenKind::Gt
+                    | TokenKind::LtEq
+                    | TokenKind::GtEq
+                    | TokenKind::And2
+                    | TokenKind::Or2
+                    | TokenKind::Plus
+                    | TokenKind::Minus
+                    | TokenKind::Star
+                    | TokenKind::Slash
             );
 
             if is_binary_op {
@@ -73,7 +84,11 @@ impl Rule for StyleRule {
             // R022: Trailing comma in method definition parameters
             if tok.kind == TokenKind::Comma {
                 if let Some(next) = tokens.get(i + 1) {
-                    let real_next = if next.kind == TokenKind::Whitespace { tokens.get(i + 2) } else { Some(next) };
+                    let real_next = if next.kind == TokenKind::Whitespace {
+                        tokens.get(i + 2)
+                    } else {
+                        Some(next)
+                    };
                     if let Some(rn) = real_next {
                         if rn.kind == TokenKind::RParen {
                             diags.push(Diagnostic::new(
@@ -117,7 +132,7 @@ impl Rule for StyleRule {
             if tok.kind == TokenKind::Ident && tok.text == "p" {
                 if let Some(next) = tokens.get(i + 1) {
                     let is_nil = if next.kind == TokenKind::Whitespace {
-                        tokens.get(i + 2).map_or(false, |t| t.kind == TokenKind::Nil)
+                        tokens.get(i + 2).is_some_and(|t| t.kind == TokenKind::Nil)
                     } else {
                         next.kind == TokenKind::Nil
                     };
@@ -147,7 +162,12 @@ mod tests {
     fn check(source: &str) -> Vec<Diagnostic> {
         let lines: Vec<&str> = source.lines().collect();
         let tokens = Lexer::new(source).tokenize();
-        let ctx = LintContext { file: "test.rb", source, lines: &lines, tokens: &tokens };
+        let ctx = LintContext {
+            file: "test.rb",
+            source,
+            lines: &lines,
+            tokens: &tokens,
+        };
         StyleRule.check(&ctx)
     }
 

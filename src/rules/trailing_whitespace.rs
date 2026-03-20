@@ -1,11 +1,13 @@
-use crate::diagnostic::{Diagnostic, Severity};
 use super::{LintContext, Rule};
+use crate::diagnostic::{Diagnostic, Severity};
 
 /// R002 - No trailing whitespace
 pub struct TrailingWhitespaceRule;
 
 impl Rule for TrailingWhitespaceRule {
-    fn name(&self) -> &'static str { "R002" }
+    fn name(&self) -> &'static str {
+        "R002"
+    }
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
         let mut diags = Vec::new();
@@ -18,7 +20,11 @@ impl Rule for TrailingWhitespaceRule {
                         i + 1,
                         line.trim_end().len() + 1,
                         "R002",
-                        format!("Trailing whitespace ({} character{})", trailing, if trailing == 1 { "" } else { "s" }),
+                        format!(
+                            "Trailing whitespace ({} character{})",
+                            trailing,
+                            if trailing == 1 { "" } else { "s" }
+                        ),
                         Severity::Warning,
                     )
                     .with_fix(line.trim_end().to_string()),
@@ -37,7 +43,12 @@ mod tests {
     fn check(source: &str) -> Vec<Diagnostic> {
         let lines: Vec<&str> = source.lines().collect();
         let tokens = Lexer::new(source).tokenize();
-        let ctx = LintContext { file: "test.rb", source, lines: &lines, tokens: &tokens };
+        let ctx = LintContext {
+            file: "test.rb",
+            source,
+            lines: &lines,
+            tokens: &tokens,
+        };
         TrailingWhitespaceRule.check(&ctx)
     }
 

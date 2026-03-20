@@ -1,5 +1,5 @@
-use crate::diagnostic::{Diagnostic, Severity};
 use super::{LintContext, Rule};
+use crate::diagnostic::{Diagnostic, Severity};
 
 /// R001 - Lines should not exceed max_length characters
 pub struct LineLengthRule {
@@ -13,7 +13,9 @@ impl Default for LineLengthRule {
 }
 
 impl Rule for LineLengthRule {
-    fn name(&self) -> &'static str { "R001" }
+    fn name(&self) -> &'static str {
+        "R001"
+    }
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
         let mut diags = Vec::new();
@@ -42,14 +44,24 @@ mod tests {
     fn check(source: &str) -> Vec<Diagnostic> {
         let lines: Vec<&str> = source.lines().collect();
         let tokens = Lexer::new(source).tokenize();
-        let ctx = LintContext { file: "test.rb", source, lines: &lines, tokens: &tokens };
+        let ctx = LintContext {
+            file: "test.rb",
+            source,
+            lines: &lines,
+            tokens: &tokens,
+        };
         LineLengthRule::default().check(&ctx)
     }
 
     fn check_with_max(source: &str, max: usize) -> Vec<Diagnostic> {
         let lines: Vec<&str> = source.lines().collect();
         let tokens = Lexer::new(source).tokenize();
-        let ctx = LintContext { file: "test.rb", source, lines: &lines, tokens: &tokens };
+        let ctx = LintContext {
+            file: "test.rb",
+            source,
+            lines: &lines,
+            tokens: &tokens,
+        };
         LineLengthRule { max_length: max }.check(&ctx)
     }
 
@@ -66,7 +78,7 @@ mod tests {
 
     #[test]
     fn no_violation_exactly_at_limit() {
-        let line = "x" .repeat(120);
+        let line = "x".repeat(120);
         assert!(check(&line).is_empty());
     }
 

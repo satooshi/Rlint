@@ -1,5 +1,5 @@
-use colored::Colorize;
 use crate::diagnostic::{Diagnostic, Severity};
+use colored::Colorize;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutputFormat {
@@ -16,8 +16,8 @@ pub struct Reporter {
 impl Reporter {
     pub fn print(&self, diags: &[Diagnostic]) {
         match self.format {
-            OutputFormat::Text   => self.print_text(diags),
-            OutputFormat::Json   => self.print_json(diags),
+            OutputFormat::Text => self.print_text(diags),
+            OutputFormat::Json => self.print_json(diags),
             OutputFormat::Github => self.print_github(diags),
         }
     }
@@ -33,14 +33,14 @@ impl Reporter {
             let loc = format!("{}:{}", d.line, d.col);
             let rule = format!("[{}]", d.rule).dimmed();
             let msg = match d.severity {
-                Severity::Error   => d.message.as_str().red().bold().to_string(),
+                Severity::Error => d.message.as_str().red().bold().to_string(),
                 Severity::Warning => d.message.as_str().yellow().to_string(),
-                Severity::Info    => d.message.as_str().cyan().to_string(),
+                Severity::Info => d.message.as_str().cyan().to_string(),
             };
             let sev = match d.severity {
-                Severity::Error   => "error  ".red().bold().to_string(),
+                Severity::Error => "error  ".red().bold().to_string(),
                 Severity::Warning => "warning".yellow().to_string(),
-                Severity::Info    => "info   ".cyan().to_string(),
+                Severity::Info => "info   ".cyan().to_string(),
             };
 
             println!("  {} {} {} {}", loc.dimmed(), sev, msg, rule);
@@ -61,9 +61,9 @@ impl Reporter {
     fn print_github(&self, diags: &[Diagnostic]) {
         for d in diags {
             let level = match d.severity {
-                Severity::Error   => "error",
+                Severity::Error => "error",
                 Severity::Warning => "warning",
-                Severity::Info    => "notice",
+                Severity::Info => "notice",
             };
             println!(
                 "::{} file={},line={},col={},title={}::{}",
@@ -73,17 +73,35 @@ impl Reporter {
     }
 
     pub fn print_summary(&self, diags: &[Diagnostic], files_checked: usize, elapsed_ms: u128) {
-        if self.format != OutputFormat::Text { return; }
+        if self.format != OutputFormat::Text {
+            return;
+        }
 
-        let errors   = diags.iter().filter(|d| d.severity == Severity::Error).count();
-        let warnings = diags.iter().filter(|d| d.severity == Severity::Warning).count();
-        let infos    = diags.iter().filter(|d| d.severity == Severity::Info).count();
+        let errors = diags
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .count();
+        let warnings = diags
+            .iter()
+            .filter(|d| d.severity == Severity::Warning)
+            .count();
+        let infos = diags
+            .iter()
+            .filter(|d| d.severity == Severity::Info)
+            .count();
 
         println!();
         println!(
             "{} {} {} in {} {} ({} ms)",
-            format!("{} error{}", errors,   if errors   == 1 { "" } else { "s" }).red().bold(),
-            format!("{} warning{}", warnings, if warnings == 1 { "" } else { "s" }).yellow(),
+            format!("{} error{}", errors, if errors == 1 { "" } else { "s" })
+                .red()
+                .bold(),
+            format!(
+                "{} warning{}",
+                warnings,
+                if warnings == 1 { "" } else { "s" }
+            )
+            .yellow(),
             format!("{} info", infos).cyan(),
             files_checked.to_string().bold(),
             if files_checked == 1 { "file" } else { "files" },

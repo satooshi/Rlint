@@ -1,20 +1,26 @@
-use crate::diagnostic::{Diagnostic, Severity};
 use super::{LintContext, Rule};
+use crate::diagnostic::{Diagnostic, Severity};
 
 /// R003 - Files should have `# frozen_string_literal: true` magic comment
 pub struct FrozenStringLiteralRule;
 
 impl Rule for FrozenStringLiteralRule {
-    fn name(&self) -> &'static str { "R003" }
+    fn name(&self) -> &'static str {
+        "R003"
+    }
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
         // Skip empty files
-        if ctx.lines.is_empty() { return vec![]; }
+        if ctx.lines.is_empty() {
+            return vec![];
+        }
 
         // Check first two lines (allow shebang on line 1)
-        let has_frozen = ctx.lines.iter().take(3).any(|l| {
-            l.contains("frozen_string_literal: true")
-        });
+        let has_frozen = ctx
+            .lines
+            .iter()
+            .take(3)
+            .any(|l| l.contains("frozen_string_literal: true"));
 
         if !has_frozen {
             vec![Diagnostic::new(
@@ -40,7 +46,12 @@ mod tests {
     fn check(source: &str) -> Vec<Diagnostic> {
         let lines: Vec<&str> = source.lines().collect();
         let tokens = Lexer::new(source).tokenize();
-        let ctx = LintContext { file: "test.rb", source, lines: &lines, tokens: &tokens };
+        let ctx = LintContext {
+            file: "test.rb",
+            source,
+            lines: &lines,
+            tokens: &tokens,
+        };
         FrozenStringLiteralRule.check(&ctx)
     }
 
@@ -72,7 +83,10 @@ mod tests {
     #[test]
     fn violation_fix_is_magic_comment() {
         let diags = check("x = 1");
-        assert_eq!(diags[0].fix.as_deref(), Some("# frozen_string_literal: true"));
+        assert_eq!(
+            diags[0].fix.as_deref(),
+            Some("# frozen_string_literal: true")
+        );
     }
 
     #[test]

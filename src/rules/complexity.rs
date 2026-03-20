@@ -1,6 +1,6 @@
+use super::{LintContext, Rule};
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::lexer::TokenKind;
-use super::{LintContext, Rule};
 
 /// Complexity rules
 pub struct ComplexityRule;
@@ -9,7 +9,9 @@ const MAX_METHOD_LINES: usize = 30;
 const MAX_CLASS_LINES: usize = 300;
 
 impl Rule for ComplexityRule {
-    fn name(&self) -> &'static str { "R040" }
+    fn name(&self) -> &'static str {
+        "R040"
+    }
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
         let mut diags = Vec::new();
@@ -21,7 +23,9 @@ impl Rule for ComplexityRule {
             if tokens[i].kind == TokenKind::Def {
                 let def_line = tokens[i].line;
                 // Find method name
-                let name = tokens.iter().skip(i + 1)
+                let name = tokens
+                    .iter()
+                    .skip(i + 1)
                     .find(|t| !matches!(t.kind, TokenKind::Whitespace))
                     .map(|t| t.text.clone())
                     .unwrap_or_else(|| "<unknown>".into());
@@ -31,10 +35,15 @@ impl Rule for ComplexityRule {
                 let mut j = i + 1;
                 while j < tokens.len() && depth > 0 {
                     match tokens[j].kind {
-                        TokenKind::Def | TokenKind::Class | TokenKind::Module
-                        | TokenKind::Do | TokenKind::Begin
-                        | TokenKind::If | TokenKind::Unless
-                        | TokenKind::While | TokenKind::Until
+                        TokenKind::Def
+                        | TokenKind::Class
+                        | TokenKind::Module
+                        | TokenKind::Do
+                        | TokenKind::Begin
+                        | TokenKind::If
+                        | TokenKind::Unless
+                        | TokenKind::While
+                        | TokenKind::Until
                         | TokenKind::For => depth += 1,
                         TokenKind::End => depth -= 1,
                         _ => {}
@@ -68,7 +77,9 @@ impl Rule for ComplexityRule {
         while i < tokens.len() {
             if tokens[i].kind == TokenKind::Class {
                 let class_line = tokens[i].line;
-                let name = tokens.iter().skip(i + 1)
+                let name = tokens
+                    .iter()
+                    .skip(i + 1)
                     .find(|t| !matches!(t.kind, TokenKind::Whitespace))
                     .map(|t| t.text.clone())
                     .unwrap_or_else(|| "<unknown>".into());
@@ -77,8 +88,11 @@ impl Rule for ComplexityRule {
                 let mut j = i + 1;
                 while j < tokens.len() && depth > 0 {
                     match tokens[j].kind {
-                        TokenKind::Def | TokenKind::Class | TokenKind::Module
-                        | TokenKind::Do | TokenKind::Begin => depth += 1,
+                        TokenKind::Def
+                        | TokenKind::Class
+                        | TokenKind::Module
+                        | TokenKind::Do
+                        | TokenKind::Begin => depth += 1,
                         TokenKind::End => depth -= 1,
                         _ => {}
                     }
@@ -112,7 +126,9 @@ impl Rule for ComplexityRule {
         while i < tokens.len() {
             if tokens[i].kind == TokenKind::Def {
                 let def_line = tokens[i].line;
-                let name = tokens.iter().skip(i + 1)
+                let name = tokens
+                    .iter()
+                    .skip(i + 1)
                     .find(|t| !matches!(t.kind, TokenKind::Whitespace))
                     .map(|t| t.text.clone())
                     .unwrap_or_else(|| "<unknown>".into());
@@ -123,10 +139,15 @@ impl Rule for ComplexityRule {
                 while j < tokens.len() && depth > 0 {
                     match tokens[j].kind {
                         // These all open a new block that needs a matching `end`
-                        TokenKind::Def | TokenKind::Class | TokenKind::Module
-                        | TokenKind::Do | TokenKind::Begin
-                        | TokenKind::If | TokenKind::Unless
-                        | TokenKind::While | TokenKind::Until
+                        TokenKind::Def
+                        | TokenKind::Class
+                        | TokenKind::Module
+                        | TokenKind::Do
+                        | TokenKind::Begin
+                        | TokenKind::If
+                        | TokenKind::Unless
+                        | TokenKind::While
+                        | TokenKind::Until
                         | TokenKind::For => depth += 1,
                         TokenKind::End => depth -= 1,
                         // Count decision points (branching keywords)
@@ -139,9 +160,13 @@ impl Rule for ComplexityRule {
                         _ => {}
                     }
                     // Count each new block-form if/unless/while/until/for as a branch
-                    if matches!(tokens[j].kind,
-                        TokenKind::If | TokenKind::Unless |
-                        TokenKind::While | TokenKind::Until | TokenKind::For
+                    if matches!(
+                        tokens[j].kind,
+                        TokenKind::If
+                            | TokenKind::Unless
+                            | TokenKind::While
+                            | TokenKind::Until
+                            | TokenKind::For
                     ) {
                         complexity += 1;
                     }
@@ -177,7 +202,12 @@ mod tests {
     fn check(source: &str) -> Vec<Diagnostic> {
         let lines: Vec<&str> = source.lines().collect();
         let tokens = Lexer::new(source).tokenize();
-        let ctx = LintContext { file: "test.rb", source, lines: &lines, tokens: &tokens };
+        let ctx = LintContext {
+            file: "test.rb",
+            source,
+            lines: &lines,
+            tokens: &tokens,
+        };
         ComplexityRule.check(&ctx)
     }
 
@@ -206,21 +236,30 @@ mod tests {
     fn no_violation_exactly_30_lines() {
         // def + 28 body lines + end = 30 lines
         let src = make_method(28);
-        assert!(!has_rule(&check(&src), "R040"), "28 body lines should be ok");
+        assert!(
+            !has_rule(&check(&src), "R040"),
+            "28 body lines should be ok"
+        );
     }
 
     #[test]
     fn violation_method_31_lines() {
         // def + 30 body lines + end = 32 lines total → triggers
         let src = make_method(31);
-        assert!(has_rule(&check(&src), "R040"), "method > 30 lines should trigger R040");
+        assert!(
+            has_rule(&check(&src), "R040"),
+            "method > 30 lines should trigger R040"
+        );
     }
 
     #[test]
     fn violation_includes_method_name() {
         let src = make_method(35);
         let diags = check(&src);
-        let r040 = diags.iter().find(|d| d.rule == "R040").expect("R040 expected");
+        let r040 = diags
+            .iter()
+            .find(|d| d.rule == "R040")
+            .expect("R040 expected");
         assert!(r040.message.contains("foo"));
     }
 
@@ -235,25 +274,40 @@ mod tests {
     #[test]
     fn no_violation_complexity_10() {
         // baseline 1 + 9 branches = 10 (no violation)
-        let branches: String = (0..9).map(|i| format!("  if x == {}\n    y\n  end\n", i)).collect();
+        let branches: String = (0..9)
+            .map(|i| format!("  if x == {}\n    y\n  end\n", i))
+            .collect();
         let src = format!("def foo\n{}end", branches);
-        assert!(!has_rule(&check(&src), "R042"), "complexity 10 should not trigger");
+        assert!(
+            !has_rule(&check(&src), "R042"),
+            "complexity 10 should not trigger"
+        );
     }
 
     #[test]
     fn violation_complexity_11() {
         // baseline 1 + 10 branches = 11 (violation)
-        let branches: String = (0..10).map(|i| format!("  if x == {}\n    y\n  end\n", i)).collect();
+        let branches: String = (0..10)
+            .map(|i| format!("  if x == {}\n    y\n  end\n", i))
+            .collect();
         let src = format!("def foo\n{}end", branches);
-        assert!(has_rule(&check(&src), "R042"), "complexity 11 should trigger R042");
+        assert!(
+            has_rule(&check(&src), "R042"),
+            "complexity 11 should trigger R042"
+        );
     }
 
     #[test]
     fn violation_includes_complexity_value() {
-        let branches: String = (0..10).map(|i| format!("  if x == {}\n    y\n  end\n", i)).collect();
+        let branches: String = (0..10)
+            .map(|i| format!("  if x == {}\n    y\n  end\n", i))
+            .collect();
         let src = format!("def foo\n{}end", branches);
         let diags = check(&src);
-        let r042 = diags.iter().find(|d| d.rule == "R042").expect("R042 expected");
+        let r042 = diags
+            .iter()
+            .find(|d| d.rule == "R042")
+            .expect("R042 expected");
         assert!(r042.message.contains("foo"));
         assert!(r042.message.contains("11"));
     }

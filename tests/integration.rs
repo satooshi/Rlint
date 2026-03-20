@@ -1,11 +1,10 @@
-/// Integration tests: run Linter against fixture files and check diagnostics
-
-use rlint::linter::Linter;
 use rlint::diagnostic::Severity;
+/// Integration tests: run Linter against fixture files and check diagnostics
+use rlint::linter::Linter;
 
 fn lint(path: &str) -> Vec<rlint::diagnostic::Diagnostic> {
-    let source = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("Cannot read {path}: {e}"));
+    let source =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("Cannot read {path}: {e}"));
     Linter::new().lint_file(path, &source)
 }
 
@@ -18,7 +17,10 @@ fn has_rule(diags: &[rlint::diagnostic::Diagnostic], rule: &str) -> bool {
 #[test]
 fn clean_file_has_no_violations() {
     let diags = lint("tests/fixtures/clean.rb");
-    assert!(diags.is_empty(), "clean.rb should have no violations, got: {diags:?}");
+    assert!(
+        diags.is_empty(),
+        "clean.rb should have no violations, got: {diags:?}"
+    );
 }
 
 // ── violations.rb ─────────────────────────────────────────────────────────────
@@ -27,11 +29,26 @@ fn clean_file_has_no_violations() {
 fn violations_file_triggers_expected_rules() {
     let diags = lint("tests/fixtures/violations.rb");
 
-    assert!(has_rule(&diags, "R003"), "expected R003 (frozen_string_literal), got {diags:?}");
-    assert!(has_rule(&diags, "R010"), "expected R010 (method snake_case), got {diags:?}");
-    assert!(has_rule(&diags, "R012"), "expected R012 (variable camelCase), got {diags:?}");
-    assert!(has_rule(&diags, "R022"), "expected R022 (trailing comma), got {diags:?}");
-    assert!(has_rule(&diags, "R032"), "expected R032 (redundant return), got {diags:?}");
+    assert!(
+        has_rule(&diags, "R003"),
+        "expected R003 (frozen_string_literal), got {diags:?}"
+    );
+    assert!(
+        has_rule(&diags, "R010"),
+        "expected R010 (method snake_case), got {diags:?}"
+    );
+    assert!(
+        has_rule(&diags, "R012"),
+        "expected R012 (variable camelCase), got {diags:?}"
+    );
+    assert!(
+        has_rule(&diags, "R022"),
+        "expected R022 (trailing comma), got {diags:?}"
+    );
+    assert!(
+        has_rule(&diags, "R032"),
+        "expected R032 (redundant return), got {diags:?}"
+    );
 }
 
 #[test]
@@ -68,7 +85,10 @@ fn inline_if_modifier_no_r031() {
     let source = "# frozen_string_literal: true\ndef foo\n  return if done\nend\n";
     let diags = Linter::new().lint_file("test.rb", source);
     let r031: Vec<_> = diags.iter().filter(|d| d.rule == "R031").collect();
-    assert!(r031.is_empty(), "inline if modifier should not trigger R031: {r031:?}");
+    assert!(
+        r031.is_empty(),
+        "inline if modifier should not trigger R031: {r031:?}"
+    );
 }
 
 // ── empty file ────────────────────────────────────────────────────────────────
@@ -76,7 +96,10 @@ fn inline_if_modifier_no_r031() {
 #[test]
 fn empty_file_has_no_diagnostics() {
     let diags = Linter::new().lint_file("empty.rb", "");
-    assert!(diags.is_empty(), "empty file should have no diagnostics: {diags:?}");
+    assert!(
+        diags.is_empty(),
+        "empty file should have no diagnostics: {diags:?}"
+    );
 }
 
 // ── fix suggestions ───────────────────────────────────────────────────────────
@@ -84,7 +107,10 @@ fn empty_file_has_no_diagnostics() {
 #[test]
 fn r003_provides_fix() {
     let diags = Linter::new().lint_file("test.rb", "x = 1\n");
-    let r003 = diags.iter().find(|d| d.rule == "R003").expect("R003 expected");
+    let r003 = diags
+        .iter()
+        .find(|d| d.rule == "R003")
+        .expect("R003 expected");
     assert!(r003.fix.is_some(), "R003 should provide a fix suggestion");
     assert_eq!(r003.fix.as_deref(), Some("# frozen_string_literal: true"));
 }
@@ -92,6 +118,9 @@ fn r003_provides_fix() {
 #[test]
 fn r002_provides_fix() {
     let diags = Linter::new().lint_file("test.rb", "x = 1   \n");
-    let r002 = diags.iter().find(|d| d.rule == "R002").expect("R002 expected");
+    let r002 = diags
+        .iter()
+        .find(|d| d.rule == "R002")
+        .expect("R002 expected");
     assert_eq!(r002.fix.as_deref(), Some("x = 1"));
 }

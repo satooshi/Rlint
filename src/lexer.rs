@@ -10,10 +10,10 @@ pub enum TokenKind {
 
     // Identifiers
     Ident,
-    Constant,      // starts with uppercase
-    GlobalVar,     // $foo
-    InstanceVar,   // @foo
-    ClassVar,      // @@foo
+    Constant,    // starts with uppercase
+    GlobalVar,   // $foo
+    InstanceVar, // @foo
+    ClassVar,    // @@foo
 
     // Keywords
     Def,
@@ -70,16 +70,16 @@ pub enum TokenKind {
     Gt,
     LtEq,
     GtEq,
-    Spaceship,   // <=>
-    And2,        // &&
-    Or2,         // ||
-    Bang,        // !
-    Amp,         // &
-    Pipe,        // |
-    Caret,       // ^
-    Tilde,       // ~
-    LShift,      // <<
-    RShift,      // >>
+    Spaceship, // <=>
+    And2,      // &&
+    Or2,       // ||
+    Bang,      // !
+    Amp,       // &
+    Pipe,      // |
+    Caret,     // ^
+    Tilde,     // ~
+    LShift,    // <<
+    RShift,    // >>
     PlusEq,
     MinusEq,
     StarEq,
@@ -87,12 +87,12 @@ pub enum TokenKind {
     PercentEq,
     AndEq,
     OrEq,
-    Arrow,       // ->
-    FatArrow,    // =>
+    Arrow,    // ->
+    FatArrow, // =>
     Dot,
-    Dot2,        // ..
-    Dot3,        // ...
-    ColonColon,  // ::
+    Dot2,       // ..
+    Dot3,       // ...
+    ColonColon, // ::
     Colon,
     Semicolon,
     Comma,
@@ -190,7 +190,12 @@ impl<'a> Lexer<'a> {
                 }
             }
         }
-        Token { kind: TokenKind::StringLiteral, text: s, line: start_line, col: start_col }
+        Token {
+            kind: TokenKind::StringLiteral,
+            text: s,
+            line: start_line,
+            col: start_col,
+        }
     }
 
     fn lex_number(&mut self, first: char) -> Token {
@@ -206,7 +211,12 @@ impl<'a> Lexer<'a> {
                 while matches!(self.peek(), Some('0'..='9' | 'a'..='f' | 'A'..='F' | '_')) {
                     s.push(self.advance().unwrap());
                 }
-                return Token { kind: TokenKind::Integer, text: s, line: start_line, col: start_col };
+                return Token {
+                    kind: TokenKind::Integer,
+                    text: s,
+                    line: start_line,
+                    col: start_col,
+                };
             }
         }
 
@@ -230,8 +240,17 @@ impl<'a> Lexer<'a> {
                 s.push(self.advance().unwrap());
             }
         }
-        let kind = if is_float { TokenKind::Float } else { TokenKind::Integer };
-        Token { kind, text: s, line: start_line, col: start_col }
+        let kind = if is_float {
+            TokenKind::Float
+        } else {
+            TokenKind::Integer
+        };
+        Token {
+            kind,
+            text: s,
+            line: start_line,
+            col: start_col,
+        }
     }
 
     fn lex_ident(&mut self, first: char) -> Token {
@@ -247,49 +266,54 @@ impl<'a> Lexer<'a> {
         }
 
         let kind = match s.as_str() {
-            "def"       => TokenKind::Def,
-            "end"       => TokenKind::End,
-            "class"     => TokenKind::Class,
-            "module"    => TokenKind::Module,
-            "do"        => TokenKind::Do,
-            "if"        => TokenKind::If,
-            "unless"    => TokenKind::Unless,
-            "while"     => TokenKind::While,
-            "until"     => TokenKind::Until,
-            "for"       => TokenKind::For,
-            "in"        => TokenKind::In,
-            "return"    => TokenKind::Return,
-            "yield"     => TokenKind::Yield,
-            "and"       => TokenKind::And,
-            "or"        => TokenKind::Or,
-            "not"       => TokenKind::Not,
-            "nil"       => TokenKind::Nil,
-            "true"      => TokenKind::True,
-            "false"     => TokenKind::False,
-            "self"      => TokenKind::Self_,
-            "super"     => TokenKind::Super,
-            "begin"     => TokenKind::Begin,
-            "rescue"    => TokenKind::Rescue,
-            "ensure"    => TokenKind::Ensure,
-            "raise"     => TokenKind::Raise,
-            "then"      => TokenKind::Then,
-            "else"      => TokenKind::Else,
-            "elsif"     => TokenKind::Elsif,
-            "case"      => TokenKind::Case,
-            "when"      => TokenKind::When,
-            "require"   => TokenKind::Require,
-            "attr_reader"   => TokenKind::AttrReader,
-            "attr_writer"   => TokenKind::AttrWriter,
+            "def" => TokenKind::Def,
+            "end" => TokenKind::End,
+            "class" => TokenKind::Class,
+            "module" => TokenKind::Module,
+            "do" => TokenKind::Do,
+            "if" => TokenKind::If,
+            "unless" => TokenKind::Unless,
+            "while" => TokenKind::While,
+            "until" => TokenKind::Until,
+            "for" => TokenKind::For,
+            "in" => TokenKind::In,
+            "return" => TokenKind::Return,
+            "yield" => TokenKind::Yield,
+            "and" => TokenKind::And,
+            "or" => TokenKind::Or,
+            "not" => TokenKind::Not,
+            "nil" => TokenKind::Nil,
+            "true" => TokenKind::True,
+            "false" => TokenKind::False,
+            "self" => TokenKind::Self_,
+            "super" => TokenKind::Super,
+            "begin" => TokenKind::Begin,
+            "rescue" => TokenKind::Rescue,
+            "ensure" => TokenKind::Ensure,
+            "raise" => TokenKind::Raise,
+            "then" => TokenKind::Then,
+            "else" => TokenKind::Else,
+            "elsif" => TokenKind::Elsif,
+            "case" => TokenKind::Case,
+            "when" => TokenKind::When,
+            "require" => TokenKind::Require,
+            "attr_reader" => TokenKind::AttrReader,
+            "attr_writer" => TokenKind::AttrWriter,
             "attr_accessor" => TokenKind::AttrAccessor,
-            "attr"      => TokenKind::Attr,
-            "private"   => TokenKind::Private,
+            "attr" => TokenKind::Attr,
+            "private" => TokenKind::Private,
             "protected" => TokenKind::Protected,
-            "public"    => TokenKind::Public,
-            "freeze"    => TokenKind::Freeze,
+            "public" => TokenKind::Public,
+            "freeze" => TokenKind::Freeze,
             _ if first.is_uppercase() => TokenKind::Constant,
             _ => TokenKind::Ident,
         };
-        Token { kind, text: s, line: start_line, col: start_col }
+        Token {
+            kind,
+            text: s,
+            line: start_line,
+            col: start_col,
+        }
     }
 
     fn lex_comment(&mut self) -> Token {
@@ -299,7 +323,12 @@ impl<'a> Lexer<'a> {
         while self.peek() != Some('\n') && self.peek().is_some() {
             s.push(self.advance().unwrap());
         }
-        Token { kind: TokenKind::Comment, text: s, line: start_line, col: start_col }
+        Token {
+            kind: TokenKind::Comment,
+            text: s,
+            line: start_line,
+            col: start_col,
+        }
     }
 
     pub fn tokenize(&mut self) -> Vec<Token> {
@@ -308,7 +337,9 @@ impl<'a> Lexer<'a> {
             let tok = self.next_token();
             let is_eof = tok.kind == TokenKind::Eof;
             tokens.push(tok);
-            if is_eof { break; }
+            if is_eof {
+                break;
+            }
         }
         tokens
     }
@@ -318,18 +349,35 @@ impl<'a> Lexer<'a> {
         let start_col = self.col;
 
         let c = match self.advance() {
-            None => return Token { kind: TokenKind::Eof, text: String::new(), line: start_line, col: start_col },
+            None => {
+                return Token {
+                    kind: TokenKind::Eof,
+                    text: String::new(),
+                    line: start_line,
+                    col: start_col,
+                }
+            }
             Some(c) => c,
         };
 
         match c {
-            '\n' => Token { kind: TokenKind::Newline, text: "\n".into(), line: start_line, col: start_col - 1 },
+            '\n' => Token {
+                kind: TokenKind::Newline,
+                text: "\n".into(),
+                line: start_line,
+                col: start_col - 1,
+            },
             ' ' | '\t' | '\r' => {
                 let mut s = String::from(c);
                 while matches!(self.peek(), Some(' ' | '\t' | '\r')) {
                     s.push(self.advance().unwrap());
                 }
-                Token { kind: TokenKind::Whitespace, text: s, line: start_line, col: start_col }
+                Token {
+                    kind: TokenKind::Whitespace,
+                    text: s,
+                    line: start_line,
+                    col: start_col,
+                }
             }
             '#' => self.lex_comment(),
             '"' | '\'' => self.lex_string(c),
@@ -340,7 +388,12 @@ impl<'a> Lexer<'a> {
                 while matches!(self.peek(), Some('a'..='z' | 'A'..='Z' | '0'..='9' | '_')) {
                     s.push(self.advance().unwrap());
                 }
-                Token { kind: TokenKind::GlobalVar, text: s, line: start_line, col: start_col }
+                Token {
+                    kind: TokenKind::GlobalVar,
+                    text: s,
+                    line: start_line,
+                    col: start_col,
+                }
             }
             '@' => {
                 if self.peek() == Some('@') {
@@ -349,104 +402,417 @@ impl<'a> Lexer<'a> {
                     while matches!(self.peek(), Some('a'..='z' | 'A'..='Z' | '0'..='9' | '_')) {
                         s.push(self.advance().unwrap());
                     }
-                    Token { kind: TokenKind::ClassVar, text: s, line: start_line, col: start_col }
+                    Token {
+                        kind: TokenKind::ClassVar,
+                        text: s,
+                        line: start_line,
+                        col: start_col,
+                    }
                 } else {
                     let mut s = String::from('@');
                     while matches!(self.peek(), Some('a'..='z' | 'A'..='Z' | '0'..='9' | '_')) {
                         s.push(self.advance().unwrap());
                     }
-                    Token { kind: TokenKind::InstanceVar, text: s, line: start_line, col: start_col }
+                    Token {
+                        kind: TokenKind::InstanceVar,
+                        text: s,
+                        line: start_line,
+                        col: start_col,
+                    }
                 }
             }
             ':' => {
                 if self.peek() == Some(':') {
                     self.advance();
-                    Token { kind: TokenKind::ColonColon, text: "::".into(), line: start_line, col: start_col }
+                    Token {
+                        kind: TokenKind::ColonColon,
+                        text: "::".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
                 } else if matches!(self.peek(), Some('a'..='z' | 'A'..='Z' | '_')) {
                     let mut s = String::from(':');
-                    while matches!(self.peek(), Some('a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '?' | '!')) {
+                    while matches!(
+                        self.peek(),
+                        Some('a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '?' | '!')
+                    ) {
                         s.push(self.advance().unwrap());
                     }
-                    Token { kind: TokenKind::Symbol, text: s, line: start_line, col: start_col }
+                    Token {
+                        kind: TokenKind::Symbol,
+                        text: s,
+                        line: start_line,
+                        col: start_col,
+                    }
                 } else {
-                    Token { kind: TokenKind::Colon, text: ":".into(), line: start_line, col: start_col }
+                    Token {
+                        kind: TokenKind::Colon,
+                        text: ":".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
                 }
             }
             '=' => match self.peek() {
-                Some('=') => { self.advance();
-                    if self.peek() == Some('=') { self.advance(); Token { kind: TokenKind::EqEqEq, text: "===".into(), line: start_line, col: start_col } }
-                    else { Token { kind: TokenKind::EqEq, text: "==".into(), line: start_line, col: start_col } }
+                Some('=') => {
+                    self.advance();
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        Token {
+                            kind: TokenKind::EqEqEq,
+                            text: "===".into(),
+                            line: start_line,
+                            col: start_col,
+                        }
+                    } else {
+                        Token {
+                            kind: TokenKind::EqEq,
+                            text: "==".into(),
+                            line: start_line,
+                            col: start_col,
+                        }
+                    }
                 }
-                Some('>') => { self.advance(); Token { kind: TokenKind::FatArrow, text: "=>".into(), line: start_line, col: start_col } }
-                _ => Token { kind: TokenKind::Eq, text: "=".into(), line: start_line, col: start_col },
+                Some('>') => {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::FatArrow,
+                        text: "=>".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
+                }
+                _ => Token {
+                    kind: TokenKind::Eq,
+                    text: "=".into(),
+                    line: start_line,
+                    col: start_col,
+                },
             },
             '!' => match self.peek() {
-                Some('=') => { self.advance(); Token { kind: TokenKind::NotEq, text: "!=".into(), line: start_line, col: start_col } }
-                _ => Token { kind: TokenKind::Bang, text: "!".into(), line: start_line, col: start_col },
+                Some('=') => {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::NotEq,
+                        text: "!=".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
+                }
+                _ => Token {
+                    kind: TokenKind::Bang,
+                    text: "!".into(),
+                    line: start_line,
+                    col: start_col,
+                },
             },
             '<' => match self.peek() {
-                Some('<') => { self.advance(); Token { kind: TokenKind::LShift, text: "<<".into(), line: start_line, col: start_col } }
-                Some('=') => { self.advance();
-                    if self.peek() == Some('>') { self.advance(); Token { kind: TokenKind::Spaceship, text: "<=>".into(), line: start_line, col: start_col } }
-                    else { Token { kind: TokenKind::LtEq, text: "<=".into(), line: start_line, col: start_col } }
+                Some('<') => {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::LShift,
+                        text: "<<".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
                 }
-                _ => Token { kind: TokenKind::Lt, text: "<".into(), line: start_line, col: start_col },
+                Some('=') => {
+                    self.advance();
+                    if self.peek() == Some('>') {
+                        self.advance();
+                        Token {
+                            kind: TokenKind::Spaceship,
+                            text: "<=>".into(),
+                            line: start_line,
+                            col: start_col,
+                        }
+                    } else {
+                        Token {
+                            kind: TokenKind::LtEq,
+                            text: "<=".into(),
+                            line: start_line,
+                            col: start_col,
+                        }
+                    }
+                }
+                _ => Token {
+                    kind: TokenKind::Lt,
+                    text: "<".into(),
+                    line: start_line,
+                    col: start_col,
+                },
             },
             '>' => match self.peek() {
-                Some('>') => { self.advance(); Token { kind: TokenKind::RShift, text: ">>".into(), line: start_line, col: start_col } }
-                Some('=') => { self.advance(); Token { kind: TokenKind::GtEq, text: ">=".into(), line: start_line, col: start_col } }
-                _ => Token { kind: TokenKind::Gt, text: ">".into(), line: start_line, col: start_col },
+                Some('>') => {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::RShift,
+                        text: ">>".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
+                }
+                Some('=') => {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::GtEq,
+                        text: ">=".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
+                }
+                _ => Token {
+                    kind: TokenKind::Gt,
+                    text: ">".into(),
+                    line: start_line,
+                    col: start_col,
+                },
             },
             '+' => match self.peek() {
-                Some('=') => { self.advance(); Token { kind: TokenKind::PlusEq, text: "+=".into(), line: start_line, col: start_col } }
-                _ => Token { kind: TokenKind::Plus, text: "+".into(), line: start_line, col: start_col },
+                Some('=') => {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::PlusEq,
+                        text: "+=".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
+                }
+                _ => Token {
+                    kind: TokenKind::Plus,
+                    text: "+".into(),
+                    line: start_line,
+                    col: start_col,
+                },
             },
             '-' => match self.peek() {
-                Some('=') => { self.advance(); Token { kind: TokenKind::MinusEq, text: "-=".into(), line: start_line, col: start_col } }
-                Some('>') => { self.advance(); Token { kind: TokenKind::Arrow, text: "->".into(), line: start_line, col: start_col } }
-                _ => Token { kind: TokenKind::Minus, text: "-".into(), line: start_line, col: start_col },
+                Some('=') => {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::MinusEq,
+                        text: "-=".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
+                }
+                Some('>') => {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::Arrow,
+                        text: "->".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
+                }
+                _ => Token {
+                    kind: TokenKind::Minus,
+                    text: "-".into(),
+                    line: start_line,
+                    col: start_col,
+                },
             },
             '*' => match self.peek() {
-                Some('=') => { self.advance(); Token { kind: TokenKind::StarEq, text: "*=".into(), line: start_line, col: start_col } }
-                _ => Token { kind: TokenKind::Star, text: "*".into(), line: start_line, col: start_col },
+                Some('=') => {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::StarEq,
+                        text: "*=".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
+                }
+                _ => Token {
+                    kind: TokenKind::Star,
+                    text: "*".into(),
+                    line: start_line,
+                    col: start_col,
+                },
             },
             '/' => match self.peek() {
-                Some('=') => { self.advance(); Token { kind: TokenKind::SlashEq, text: "/=".into(), line: start_line, col: start_col } }
-                _ => Token { kind: TokenKind::Slash, text: "/".into(), line: start_line, col: start_col },
+                Some('=') => {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::SlashEq,
+                        text: "/=".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
+                }
+                _ => Token {
+                    kind: TokenKind::Slash,
+                    text: "/".into(),
+                    line: start_line,
+                    col: start_col,
+                },
             },
             '%' => match self.peek() {
-                Some('=') => { self.advance(); Token { kind: TokenKind::PercentEq, text: "%=".into(), line: start_line, col: start_col } }
-                _ => Token { kind: TokenKind::Percent, text: "%".into(), line: start_line, col: start_col },
+                Some('=') => {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::PercentEq,
+                        text: "%=".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
+                }
+                _ => Token {
+                    kind: TokenKind::Percent,
+                    text: "%".into(),
+                    line: start_line,
+                    col: start_col,
+                },
             },
             '&' => match self.peek() {
-                Some('&') => { self.advance(); Token { kind: TokenKind::And2, text: "&&".into(), line: start_line, col: start_col } }
-                Some('=') => { self.advance(); Token { kind: TokenKind::AndEq, text: "&=".into(), line: start_line, col: start_col } }
-                _ => Token { kind: TokenKind::Amp, text: "&".into(), line: start_line, col: start_col },
+                Some('&') => {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::And2,
+                        text: "&&".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
+                }
+                Some('=') => {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::AndEq,
+                        text: "&=".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
+                }
+                _ => Token {
+                    kind: TokenKind::Amp,
+                    text: "&".into(),
+                    line: start_line,
+                    col: start_col,
+                },
             },
             '|' => match self.peek() {
-                Some('|') => { self.advance(); Token { kind: TokenKind::Or2, text: "||".into(), line: start_line, col: start_col } }
-                Some('=') => { self.advance(); Token { kind: TokenKind::OrEq, text: "|=".into(), line: start_line, col: start_col } }
-                _ => Token { kind: TokenKind::Pipe, text: "|".into(), line: start_line, col: start_col },
+                Some('|') => {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::Or2,
+                        text: "||".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
+                }
+                Some('=') => {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::OrEq,
+                        text: "|=".into(),
+                        line: start_line,
+                        col: start_col,
+                    }
+                }
+                _ => Token {
+                    kind: TokenKind::Pipe,
+                    text: "|".into(),
+                    line: start_line,
+                    col: start_col,
+                },
             },
             '.' => match self.peek() {
-                Some('.') => { self.advance();
-                    if self.peek() == Some('.') { self.advance(); Token { kind: TokenKind::Dot3, text: "...".into(), line: start_line, col: start_col } }
-                    else { Token { kind: TokenKind::Dot2, text: "..".into(), line: start_line, col: start_col } }
+                Some('.') => {
+                    self.advance();
+                    if self.peek() == Some('.') {
+                        self.advance();
+                        Token {
+                            kind: TokenKind::Dot3,
+                            text: "...".into(),
+                            line: start_line,
+                            col: start_col,
+                        }
+                    } else {
+                        Token {
+                            kind: TokenKind::Dot2,
+                            text: "..".into(),
+                            line: start_line,
+                            col: start_col,
+                        }
+                    }
                 }
-                _ => Token { kind: TokenKind::Dot, text: ".".into(), line: start_line, col: start_col },
+                _ => Token {
+                    kind: TokenKind::Dot,
+                    text: ".".into(),
+                    line: start_line,
+                    col: start_col,
+                },
             },
-            '^' => Token { kind: TokenKind::Caret, text: "^".into(), line: start_line, col: start_col },
-            '~' => Token { kind: TokenKind::Tilde, text: "~".into(), line: start_line, col: start_col },
-            '?' => Token { kind: TokenKind::Question, text: "?".into(), line: start_line, col: start_col },
-            ';' => Token { kind: TokenKind::Semicolon, text: ";".into(), line: start_line, col: start_col },
-            ',' => Token { kind: TokenKind::Comma, text: ",".into(), line: start_line, col: start_col },
-            '(' => Token { kind: TokenKind::LParen, text: "(".into(), line: start_line, col: start_col },
-            ')' => Token { kind: TokenKind::RParen, text: ")".into(), line: start_line, col: start_col },
-            '[' => Token { kind: TokenKind::LBracket, text: "[".into(), line: start_line, col: start_col },
-            ']' => Token { kind: TokenKind::RBracket, text: "]".into(), line: start_line, col: start_col },
-            '{' => Token { kind: TokenKind::LBrace, text: "{".into(), line: start_line, col: start_col },
-            '}' => Token { kind: TokenKind::RBrace, text: "}".into(), line: start_line, col: start_col },
-            other => Token { kind: TokenKind::Unknown(other), text: other.to_string(), line: start_line, col: start_col },
+            '^' => Token {
+                kind: TokenKind::Caret,
+                text: "^".into(),
+                line: start_line,
+                col: start_col,
+            },
+            '~' => Token {
+                kind: TokenKind::Tilde,
+                text: "~".into(),
+                line: start_line,
+                col: start_col,
+            },
+            '?' => Token {
+                kind: TokenKind::Question,
+                text: "?".into(),
+                line: start_line,
+                col: start_col,
+            },
+            ';' => Token {
+                kind: TokenKind::Semicolon,
+                text: ";".into(),
+                line: start_line,
+                col: start_col,
+            },
+            ',' => Token {
+                kind: TokenKind::Comma,
+                text: ",".into(),
+                line: start_line,
+                col: start_col,
+            },
+            '(' => Token {
+                kind: TokenKind::LParen,
+                text: "(".into(),
+                line: start_line,
+                col: start_col,
+            },
+            ')' => Token {
+                kind: TokenKind::RParen,
+                text: ")".into(),
+                line: start_line,
+                col: start_col,
+            },
+            '[' => Token {
+                kind: TokenKind::LBracket,
+                text: "[".into(),
+                line: start_line,
+                col: start_col,
+            },
+            ']' => Token {
+                kind: TokenKind::RBracket,
+                text: "]".into(),
+                line: start_line,
+                col: start_col,
+            },
+            '{' => Token {
+                kind: TokenKind::LBrace,
+                text: "{".into(),
+                line: start_line,
+                col: start_col,
+            },
+            '}' => Token {
+                kind: TokenKind::RBrace,
+                text: "}".into(),
+                line: start_line,
+                col: start_col,
+            },
+            other => Token {
+                kind: TokenKind::Unknown(other),
+                text: other.to_string(),
+                line: start_line,
+                col: start_col,
+            },
         }
     }
 }
@@ -459,14 +825,15 @@ mod tests {
         Lexer::new(src).tokenize()
     }
 
-    fn kinds(src: &str) -> Vec<TokenKind> {
-        tokenize(src).into_iter().map(|t| t.kind).collect()
-    }
-
     fn non_ws_kinds(src: &str) -> Vec<TokenKind> {
         tokenize(src)
             .into_iter()
-            .filter(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Newline | TokenKind::Eof))
+            .filter(|t| {
+                !matches!(
+                    t.kind,
+                    TokenKind::Whitespace | TokenKind::Newline | TokenKind::Eof
+                )
+            })
             .map(|t| t.kind)
             .collect()
     }

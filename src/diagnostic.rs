@@ -10,9 +10,9 @@ pub enum Severity {
 impl std::fmt::Display for Severity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Severity::Error   => write!(f, "error"),
+            Severity::Error => write!(f, "error"),
             Severity::Warning => write!(f, "warning"),
-            Severity::Info    => write!(f, "info"),
+            Severity::Info => write!(f, "info"),
         }
     }
 }
