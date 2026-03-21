@@ -67,12 +67,7 @@ impl TreeBuilder {
         result
     }
 
-    fn parse_level(
-        tokens: &[Token],
-        idx: &mut usize,
-        out: &mut Vec<Node>,
-        stmt_starts: &[bool],
-    ) {
+    fn parse_level(tokens: &[Token], idx: &mut usize, out: &mut Vec<Node>, stmt_starts: &[bool]) {
         while *idx < tokens.len() {
             let tok = &tokens[*idx];
 
@@ -83,23 +78,38 @@ impl TreeBuilder {
                 TokenKind::Class => {
                     out.push(Self::parse_keyed(tokens, idx, NodeKind::Class, stmt_starts))
                 }
-                TokenKind::Module => {
-                    out.push(Self::parse_keyed(tokens, idx, NodeKind::Module, stmt_starts))
-                }
-                TokenKind::Begin => {
-                    out.push(Self::parse_anonymous(tokens, idx, NodeKind::Begin, stmt_starts))
-                }
-                TokenKind::Case => {
-                    out.push(Self::parse_anonymous(tokens, idx, NodeKind::Case, stmt_starts))
-                }
-                TokenKind::Do => {
-                    out.push(Self::parse_anonymous(tokens, idx, NodeKind::Do, stmt_starts))
-                }
+                TokenKind::Module => out.push(Self::parse_keyed(
+                    tokens,
+                    idx,
+                    NodeKind::Module,
+                    stmt_starts,
+                )),
+                TokenKind::Begin => out.push(Self::parse_anonymous(
+                    tokens,
+                    idx,
+                    NodeKind::Begin,
+                    stmt_starts,
+                )),
+                TokenKind::Case => out.push(Self::parse_anonymous(
+                    tokens,
+                    idx,
+                    NodeKind::Case,
+                    stmt_starts,
+                )),
+                TokenKind::Do => out.push(Self::parse_anonymous(
+                    tokens,
+                    idx,
+                    NodeKind::Do,
+                    stmt_starts,
+                )),
 
                 // `for` is always a block form in Ruby (needs `end`)
-                TokenKind::For => {
-                    out.push(Self::parse_anonymous(tokens, idx, NodeKind::For, stmt_starts))
-                }
+                TokenKind::For => out.push(Self::parse_anonymous(
+                    tokens,
+                    idx,
+                    NodeKind::For,
+                    stmt_starts,
+                )),
 
                 TokenKind::If | TokenKind::Unless | TokenKind::While | TokenKind::Until => {
                     let kind = match tok.kind {
@@ -109,8 +119,7 @@ impl TreeBuilder {
                         TokenKind::Until => NodeKind::Until,
                         _ => unreachable!(),
                     };
-                    if let Some(node) =
-                        Self::parse_block_or_postfix(tokens, idx, kind, stmt_starts)
+                    if let Some(node) = Self::parse_block_or_postfix(tokens, idx, kind, stmt_starts)
                     {
                         out.push(node);
                     }
