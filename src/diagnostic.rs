@@ -18,12 +18,19 @@ impl std::fmt::Display for Severity {
 }
 
 /// How a fix should be applied to the source file
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub enum FixKind {
     /// Replace the content of the diagnostic's line with the fix string
+    #[default]
     ReplaceLine,
     /// Insert the fix string as a new line *before* the diagnostic's line
     InsertBefore,
+}
+
+impl FixKind {
+    fn is_default(&self) -> bool {
+        matches!(self, FixKind::ReplaceLine)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -37,6 +44,7 @@ pub struct Diagnostic {
     /// Optional auto-fix suggestion text
     pub fix: Option<String>,
     /// How to apply the fix (defaults to ReplaceLine)
+    #[serde(skip_serializing_if = "FixKind::is_default")]
     pub fix_kind: FixKind,
 }
 

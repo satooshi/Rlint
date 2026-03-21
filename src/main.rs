@@ -35,9 +35,12 @@ Configuration:
     ignore = [\"R003\"]
 
 Inline suppression:
-  # rlint:disable-next-line R001
-  # rlint:disable R001,R002
-  # rlint:enable               (re-enables all or specific rules)
+  # rlint:disable-next-line R001   (suppress specific rules on next line)
+  # rlint:disable R001,R002        (disable specific rules until re-enabled)
+  # rlint:disable                  (disable all rules until re-enabled)
+  # rlint:enable R001              (re-enable specific rules disabled individually)
+  # rlint:enable                   (re-enable all rules)
+  Note: after a global disable, enable always re-enables all rules.
 
 Rules:
   R001  Line too long
@@ -112,8 +115,11 @@ fn collect_ruby_files(paths: &[String], exclude: &[glob::Pattern]) -> Vec<String
         let meta = std::fs::metadata(path);
         if let Ok(m) = meta {
             if m.is_file() {
-                if !is_excluded(path, exclude) {
-                    files.push(path.clone());
+                // Normalize explicit file paths the same way as WalkDir-discovered
+                // ones, so that exclude patterns like "vendor/**" match "./vendor/foo.rb".
+                let normalized = path.strip_prefix("./").unwrap_or(path);
+                if !is_excluded(normalized, exclude) {
+                    files.push(normalized.to_string());
                 }
             } else {
                 for entry in WalkDir::new(path)
@@ -254,13 +260,14 @@ fn main() {
         return;
     }
 
-    // First lint pass
+    // First lint pass (without errors_only filter when --fix is active, so that
+    // fixable warnings like R002/R003 are included in the fix set).
     let all_diags = lint_files(
         &files,
         &linter,
         &effective_select,
         &effective_ignore,
-        cli.errors_only,
+        if cli.fix { false } else { cli.errors_only },
     );
 
     // Apply fixes when --fix is requested
@@ -303,6 +310,7 @@ fn main() {
     let mut flat_diags: Vec<Diagnostic> = display_diags
         .iter()
         .flat_map(|(_, d)| d.iter())
+        .filter(|d| !cli.errors_only || d.severity == Severity::Error)
         .cloned()
         .collect();
     flat_diags.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
