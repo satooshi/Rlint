@@ -21,10 +21,11 @@ pub struct ComplexityRule {
 
 impl Default for ComplexityRule {
     fn default() -> Self {
+        let config = crate::config::Config::default();
         ComplexityRule {
-            max_method_lines: 30,
-            max_class_lines: 300,
-            max_complexity: 10,
+            max_method_lines: config.max_method_lines,
+            max_class_lines: config.max_class_lines,
+            max_complexity: config.max_complexity,
         }
     }
 }

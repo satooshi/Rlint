@@ -265,25 +265,37 @@ fn main() {
 
     // Apply fixes when --fix is requested
     let mut total_fixed = 0usize;
+    let mut fixed_files: Vec<String> = Vec::new();
     if cli.fix {
         for (path, diags) in &all_diags {
             match rlint::fixer::fix_file(path, diags) {
-                Ok(n) => total_fixed += n,
+                Ok(0) => {}
+                Ok(n) => {
+                    total_fixed += n;
+                    fixed_files.push(path.clone());
+                }
                 Err(e) => eprintln!("Warning: could not fix {}: {}", path, e),
             }
         }
     }
 
-    // When fixes were applied, re-lint the modified files to show accurate post-fix state.
-    // Otherwise use the first-pass results directly.
-    let display_diags = if cli.fix && total_fixed > 0 {
-        lint_files(
-            &files,
+    // Re-lint only the files that were actually modified, then merge with unchanged results.
+    let display_diags = if !fixed_files.is_empty() {
+        let relinted = lint_files(
+            &fixed_files,
             &linter,
             &effective_select,
             &effective_ignore,
             cli.errors_only,
-        )
+        );
+        let relinted_set: std::collections::HashSet<&str> =
+            fixed_files.iter().map(|s| s.as_str()).collect();
+        let mut merged: Vec<(String, Vec<Diagnostic>)> = all_diags
+            .into_iter()
+            .filter(|(p, _)| !relinted_set.contains(p.as_str()))
+            .collect();
+        merged.extend(relinted);
+        merged
     } else {
         all_diags
     };

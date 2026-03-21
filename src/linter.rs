@@ -90,6 +90,14 @@ impl Suppression {
 }
 
 fn apply_suppressions(diags: &mut Vec<Diagnostic>, tokens: &[crate::lexer::Token]) {
+    // Fast path: skip full parsing when no rlint directives exist in the file.
+    let has_directives = tokens.iter().any(|t| {
+        t.kind == TokenKind::Comment && t.text.contains("rlint:")
+    });
+    if !has_directives {
+        return;
+    }
+
     let mut suppressions: Vec<Suppression> = Vec::new();
     // Active disable block: (rules, start_line)
     let mut active: Option<(Option<Vec<String>>, usize)> = None;

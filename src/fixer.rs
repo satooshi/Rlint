@@ -27,30 +27,22 @@ fn split_deduplicated_fixes(diags: &[Diagnostic]) -> (Vec<&Diagnostic>, Vec<&Dia
     (replace_fixes, insert_fixes)
 }
 
-/// Apply all fixable diagnostics to `source` and return the patched content.
+/// Apply all fixable diagnostics to `source` and return the patched content
+/// along with the number of fixes applied.
 ///
 /// Fixes are deduplicated per `FixKind`: at most one `ReplaceLine` and one `InsertBefore` fix
 /// are applied per line (first-wins within each kind), so both kinds can apply to the same line.
 /// Fixes are applied in reverse-line order to preserve 1-based line numbers during insertions.
 /// Original line endings (LF or CRLF) are detected from the first newline and preserved.
-pub fn apply_fixes(source: &str, diags: &[Diagnostic]) -> String {
+pub fn apply_fixes(source: &str, diags: &[Diagnostic]) -> (String, usize) {
     let ends_with_newline = source.ends_with('\n');
-    // Detect line ending style from the first actual newline in the file.
-    let bytes = source.as_bytes();
-    let mut uses_crlf = false;
-    for i in 0..bytes.len() {
-        if bytes[i] == b'\n' {
-            if i > 0 && bytes[i - 1] == b'\r' {
-                uses_crlf = true;
-            }
-            break;
-        }
-    }
+    let uses_crlf = source.find('\n').map_or(false, |i| source.as_bytes().get(i.wrapping_sub(1)) == Some(&b'\r'));
     let line_ending = if uses_crlf { "\r\n" } else { "\n" };
     // str::lines() strips both \n and \r\n, so line content is always clean.
     let mut lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
 
     let (mut replace_fixes, mut insert_fixes) = split_deduplicated_fixes(diags);
+    let fix_count = replace_fixes.len() + insert_fixes.len();
 
     // Apply ReplaceLine in reverse order (stable — no index shifting for same-kind)
     replace_fixes.sort_by(|a, b| b.line.cmp(&a.line));
@@ -74,7 +66,7 @@ pub fn apply_fixes(source: &str, diags: &[Diagnostic]) -> String {
     if ends_with_newline {
         result.push_str(line_ending);
     }
-    result
+    (result, fix_count)
 }
 
 /// Apply fixes to a file on disk atomically (write to tmp, then rename).
@@ -86,7 +78,7 @@ pub fn fix_file(path: &str, diags: &[Diagnostic]) -> std::io::Result<usize> {
     }
 
     let source = std::fs::read_to_string(path)?;
-    let fixed = apply_fixes(&source, diags);
+    let (fixed, fix_count) = apply_fixes(&source, diags);
 
     if fixed == source {
         return Ok(0);
@@ -126,8 +118,7 @@ pub fn fix_file(path: &str, diags: &[Diagnostic]) -> std::io::Result<usize> {
         }
     }
 
-    let (replace, insert) = split_deduplicated_fixes(diags);
-    Ok(replace.len() + insert.len())
+    Ok(fix_count)
 }
 
 #[cfg(test)]
@@ -146,7 +137,7 @@ mod tests {
     fn replace_line_fixes_trailing_whitespace() {
         let source = "x = 1   \ny = 2\n";
         let diag = make_diag(1, "R002", "x = 1", FixKind::ReplaceLine);
-        let result = apply_fixes(source, &[diag]);
+        let (result, _) = apply_fixes(source, &[diag]);
         assert_eq!(result, "x = 1\ny = 2\n");
     }
 
@@ -159,7 +150,7 @@ mod tests {
             "# frozen_string_literal: true",
             FixKind::InsertBefore,
         );
-        let result = apply_fixes(source, &[diag]);
+        let (result, _) = apply_fixes(source, &[diag]);
         assert_eq!(result, "# frozen_string_literal: true\nx = 1\n");
     }
 
@@ -168,7 +159,7 @@ mod tests {
         let source = "a   \nb   \nc\n";
         let d1 = make_diag(1, "R002", "a", FixKind::ReplaceLine);
         let d2 = make_diag(2, "R002", "b", FixKind::ReplaceLine);
-        let result = apply_fixes(source, &[d1, d2]);
+        let (result, _) = apply_fixes(source, &[d1, d2]);
         assert_eq!(result, "a\nb\nc\n");
     }
 
@@ -177,14 +168,14 @@ mod tests {
         let source = "x = 1\n";
         let mut d = Diagnostic::new("test.rb", 1, 1, "R001", "msg", Severity::Warning);
         d.fix = None;
-        let result = apply_fixes(source, &[d]);
+        let (result, _) = apply_fixes(source, &[d]);
         assert_eq!(result, source);
     }
 
     #[test]
     fn preserves_trailing_newline() {
         let source = "x = 1\n";
-        let result = apply_fixes(source, &[]);
+        let (result, _) = apply_fixes(source, &[]);
         assert!(result.ends_with('\n'));
     }
 
@@ -199,7 +190,7 @@ mod tests {
             FixKind::InsertBefore,
         );
         let d_replace = make_diag(1, "R002", "x = 1", FixKind::ReplaceLine);
-        let result = apply_fixes(source, &[d_insert, d_replace]);
+        let (result, _) = apply_fixes(source, &[d_insert, d_replace]);
         assert_eq!(result, "# frozen_string_literal: true\nx = 1\n");
     }
 }
