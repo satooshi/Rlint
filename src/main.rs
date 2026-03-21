@@ -1,5 +1,6 @@
 use clap::{Parser, ValueEnum};
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -288,7 +289,7 @@ fn run_lint_pass(
             cache,
             config_hash,
         );
-        let relinted_set: std::collections::HashSet<&str> =
+        let relinted_set: HashSet<&str> =
             fixed_files.iter().map(|s| s.as_str()).collect();
         let mut merged: Vec<(String, Vec<Diagnostic>)> = all_diags
             .into_iter()
@@ -397,23 +398,20 @@ fn main() {
     } else {
         Some(std::sync::Mutex::new(Cache::load(&cache_path)))
     };
-    let cache_ref = cache_mutex.as_ref();
-
     if cli.watch {
         run_watch_mode(
             &cli.paths,
             &files,
             &exclude_patterns,
-            &linter,
+            &config,
             &reporter,
             &effective_select,
             &effective_ignore,
             cli.errors_only,
             cli.fix,
             cli.statistics,
-            cache_ref,
+            cache_mutex.as_ref(),
             config_hash,
-            &cache_path,
         );
     } else {
         let has_errors = run_lint_pass(
@@ -425,7 +423,7 @@ fn main() {
             cli.errors_only,
             cli.fix,
             cli.statistics,
-            cache_ref,
+            cache_mutex.as_ref(),
             config_hash,
         );
 
@@ -445,7 +443,7 @@ fn run_watch_mode(
     watch_paths: &[String],
     initial_files: &[String],
     exclude_patterns: &[glob::Pattern],
-    linter: &Linter,
+    initial_config: &rblint::config::Config,
     reporter: &Reporter,
     effective_select: &Option<Vec<String>>,
     effective_ignore: &Option<Vec<String>>,
@@ -454,7 +452,6 @@ fn run_watch_mode(
     statistics: bool,
     cache: Option<&std::sync::Mutex<Cache>>,
     config_hash: u64,
-    cache_path: &std::path::Path,
 ) {
     use notify::event::{EventKind, ModifyKind};
     use notify::{Config as NConfig, EventHandler, RecommendedWatcher, RecursiveMode, Watcher};
@@ -468,10 +465,14 @@ fn run_watch_mode(
     })
     .expect("Error setting Ctrl+C handler");
 
+    // Mutable state that may be updated when .rlint.toml changes
+    let mut current_linter = Linter::with_config(initial_config);
+    let mut current_config_hash = config_hash;
+
     // Initial lint
     run_lint_pass(
         initial_files,
-        linter,
+        &current_linter,
         reporter,
         effective_select,
         effective_ignore,
@@ -479,7 +480,7 @@ fn run_watch_mode(
         fix,
         statistics,
         cache,
-        config_hash,
+        current_config_hash,
     );
     if let Some(c) = cache {
         c.lock().unwrap().save();
@@ -525,8 +526,16 @@ fn run_watch_mode(
                     continue;
                 }
 
+                // Check if .rlint.toml changed — if so, reload config and rebuild linter
+                let config_changed = event.paths.iter().any(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n == ".rlint.toml")
+                        .unwrap_or(false)
+                });
+
                 // Determine which Ruby files were affected
-                let changed: Vec<String> = event
+                let ruby_changed: Vec<String> = event
                     .paths
                     .iter()
                     .filter_map(|p| {
@@ -548,7 +557,7 @@ fn run_watch_mode(
                     })
                     .collect();
 
-                if changed.is_empty() {
+                if !config_changed && ruby_changed.is_empty() {
                     continue;
                 }
 
@@ -558,26 +567,27 @@ fn run_watch_mode(
                 // Drain remaining queued events to avoid redundant re-lints
                 while rx.try_recv().is_ok() {}
 
+                // Reload config and rebuild linter when .rlint.toml changes
+                if config_changed {
+                    eprintln!("[.rlint.toml changed, reloading config]");
+                    let cwd =
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                    let new_config = rblint::config::Config::load(&cwd);
+                    current_config_hash = hash_config(&new_config);
+                    current_linter = Linter::with_config(&new_config);
+                }
+
                 // Re-collect full file list in case files were added/removed
                 let files = collect_ruby_files(watch_paths, exclude_patterns);
 
                 if files.is_empty() {
                     eprintln!("No Ruby files found.");
                 } else {
-                    // Only re-lint the changed files that exist in the full list
-                    let relint_targets: Vec<String> =
-                        changed.into_iter().filter(|f| files.contains(f)).collect();
-
-                    let targets = if relint_targets.is_empty() {
-                        // Removed file or new file — re-lint everything
-                        files.clone()
-                    } else {
-                        relint_targets
-                    };
-
+                    // Always re-lint all files so the full project state is shown
+                    // (avoids other files' errors disappearing from output).
                     run_lint_pass(
-                        &targets,
-                        linter,
+                        &files,
+                        &current_linter,
                         reporter,
                         effective_select,
                         effective_ignore,
@@ -585,7 +595,7 @@ fn run_watch_mode(
                         fix,
                         statistics,
                         cache,
-                        config_hash,
+                        current_config_hash,
                     );
                     if let Some(c) = cache {
                         c.lock().unwrap().save();
@@ -606,8 +616,6 @@ fn run_watch_mode(
     }
 
     eprintln!("\nStopped.");
-    // Save the cache path to avoid an unused warning for the parameter
-    let _ = cache_path;
 }
 
 fn print_statistics(diags: &[Diagnostic]) {

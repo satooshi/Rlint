@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::config::Config;
@@ -29,7 +30,25 @@ struct CachedDiagnostic {
 struct CacheEntry {
     content_hash: u64,
     config_hash: u64,
+    version_hash: u64,
     diagnostics: Vec<CachedDiagnostic>,
+}
+
+// ── rule string interning ─────────────────────────────────────────────────────
+
+/// Intern a rule code string so we only leak each unique code once.
+/// With ~20 rule codes this is effectively zero overhead.
+fn intern_rule(rule: String) -> &'static str {
+    static INTERNED: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
+    let mut guard = INTERNED.lock().unwrap();
+    let set = guard.get_or_insert_with(HashSet::new);
+    // Check if we already interned this string
+    if let Some(&existing) = set.get(rule.as_str()) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(rule.into_boxed_str());
+    set.insert(leaked);
+    leaked
 }
 
 // ── conversion helpers ────────────────────────────────────────────────────────
@@ -64,25 +83,22 @@ fn diagnostic_to_cached(d: &Diagnostic) -> CachedDiagnostic {
     }
 }
 
-fn cached_to_diagnostic(file: &str, c: CachedDiagnostic) -> Diagnostic {
-    // Rule codes are &'static str in Diagnostic.  We store them in the cache as
-    // String and must map them back.  The simplest approach is to leak the
-    // allocation; for a CLI tool this is fine — the number of unique rule codes
-    // is tiny and bounded.
-    let rule: &'static str = Box::leak(c.rule.into_boxed_str());
+fn cached_to_diagnostic(file: &str, c: &CachedDiagnostic) -> Diagnostic {
+    // Intern rule codes so we only leak each unique string once.
+    let rule: &'static str = intern_rule(c.rule.clone());
     let mut d = Diagnostic::new(
         file,
         c.line,
         c.col,
         rule,
-        c.message,
+        c.message.clone(),
         u8_to_severity(c.severity),
     );
-    if let Some(fix) = c.fix {
+    if let Some(fix) = &c.fix {
         if fix.insert_before {
-            d = d.with_insert_before_fix(fix.text);
+            d = d.with_insert_before_fix(fix.text.clone());
         } else {
-            d = d.with_fix(fix.text);
+            d = d.with_fix(fix.text.clone());
         }
     }
     d
@@ -98,18 +114,32 @@ pub fn hash_content(content: &str) -> u64 {
 /// Deterministic hash of the config settings that affect lint results.
 /// We serialise the relevant fields to a byte string and hash that.
 pub fn hash_config(config: &Config) -> u64 {
-    // Build a compact, stable key from every config field that affects output.
+    // Sort vectors before hashing to make the hash order-independent.
+    let stable_join = |mut v: Vec<&str>| -> String {
+        v.sort_unstable();
+        v.join(",")
+    };
+
+    let select_str = stable_join(config.select.iter().map(|s| s.as_str()).collect());
+    let ignore_str = stable_join(config.ignore.iter().map(|s| s.as_str()).collect());
+    let eselect_str = stable_join(config.extend_select.iter().map(|s| s.as_str()).collect());
+
     let key = format!(
-        "ll={},mml={},mcl={},mc={},sel={:?},ign={:?},esel={:?}",
+        "ll={},mml={},mcl={},mc={},sel={},ign={},esel={}",
         config.line_length,
         config.max_method_lines,
         config.max_class_lines,
         config.max_complexity,
-        config.select,
-        config.ignore,
-        config.extend_select,
+        select_str,
+        ignore_str,
+        eselect_str,
     );
     xxh3_64(key.as_bytes())
+}
+
+/// Hash of the rblint version string, used to invalidate old cache entries.
+fn version_hash() -> u64 {
+    xxh3_64(env!("CARGO_PKG_VERSION").as_bytes())
 }
 
 // ── Cache ─────────────────────────────────────────────────────────────────────
@@ -141,7 +171,8 @@ impl Cache {
         }
     }
 
-    /// Return cached diagnostics when both hashes match, otherwise `None`.
+    /// Return cached diagnostics when content hash, config hash, and version
+    /// hash all match, otherwise `None`.
     pub fn lookup(
         &self,
         file: &Path,
@@ -149,29 +180,17 @@ impl Cache {
         config_hash: u64,
     ) -> Option<Vec<Diagnostic>> {
         let entry = self.entries.get(file)?;
-        if entry.content_hash != content_hash || entry.config_hash != config_hash {
+        if entry.content_hash != content_hash
+            || entry.config_hash != config_hash
+            || entry.version_hash != version_hash()
+        {
             return None;
         }
         let file_str = file.to_string_lossy();
         let diags = entry
             .diagnostics
             .iter()
-            .map(|c| {
-                cached_to_diagnostic(
-                    &file_str,
-                    CachedDiagnostic {
-                        rule: c.rule.clone(),
-                        message: c.message.clone(),
-                        line: c.line,
-                        col: c.col,
-                        severity: c.severity,
-                        fix: c.fix.as_ref().map(|f| CachedFix {
-                            text: f.text.clone(),
-                            insert_before: f.insert_before,
-                        }),
-                    },
-                )
-            })
+            .map(|c| cached_to_diagnostic(&file_str, c))
             .collect();
         Some(diags)
     }
@@ -190,6 +209,7 @@ impl Cache {
             CacheEntry {
                 content_hash,
                 config_hash,
+                version_hash: version_hash(),
                 diagnostics: cached,
             },
         );
@@ -313,7 +333,7 @@ mod tests {
     fn roundtrip_diagnostic_with_fix() {
         let d = make_diag_with_fix("R002");
         let cached = diagnostic_to_cached(&d);
-        let restored = cached_to_diagnostic("test.rb", cached);
+        let restored = cached_to_diagnostic("test.rb", &cached);
         assert_eq!(restored.rule, "R002");
         assert_eq!(restored.fix.as_deref(), Some("fixed line"));
         assert_eq!(restored.fix_kind, FixKind::ReplaceLine);
@@ -323,7 +343,7 @@ mod tests {
     fn roundtrip_diagnostic_insert_before() {
         let d = make_diag_insert("R003");
         let cached = diagnostic_to_cached(&d);
-        let restored = cached_to_diagnostic("test.rb", cached);
+        let restored = cached_to_diagnostic("test.rb", &cached);
         assert_eq!(restored.rule, "R003");
         assert_eq!(restored.fix.as_deref(), Some("# inserted"));
         assert_eq!(restored.fix_kind, FixKind::InsertBefore);
@@ -339,5 +359,26 @@ mod tests {
             assert_eq!(severity_to_u8(&sev), expected);
             assert_eq!(u8_to_severity(expected), sev);
         }
+    }
+
+    #[test]
+    fn hash_config_order_independent() {
+        let mut c1 = Config::default();
+        c1.select = vec!["R001".to_string(), "R002".to_string()];
+        c1.ignore = vec!["R003".to_string()];
+
+        let mut c2 = Config::default();
+        c2.select = vec!["R002".to_string(), "R001".to_string()];
+        c2.ignore = vec!["R003".to_string()];
+
+        assert_eq!(hash_config(&c1), hash_config(&c2));
+    }
+
+    #[test]
+    fn intern_rule_returns_same_ptr() {
+        let r1 = intern_rule("R001".to_string());
+        let r2 = intern_rule("R001".to_string());
+        // Same pointer — only leaked once
+        assert!(std::ptr::eq(r1, r2));
     }
 }
