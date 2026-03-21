@@ -53,7 +53,7 @@ impl Linter {
 
 /// Parse optional comma-separated rule list from a directive string.
 /// Returns `None` to mean "suppress all rules", or `Some(rules)` for specific rules.
-fn parse_rule_list(s: &str) -> Option<Vec<String>> {
+pub fn parse_rule_list(s: &str) -> Option<Vec<String>> {
     if s.is_empty() {
         None
     } else {

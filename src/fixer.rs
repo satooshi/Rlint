@@ -1,10 +1,33 @@
 use crate::diagnostic::{Diagnostic, FixKind};
 
+/// Partition fixable diagnostics into (replace_fixes, insert_fixes), deduplicating
+/// by line number within each kind (first-wins). Both kinds may apply to the same line.
+fn split_deduplicated_fixes(diags: &[Diagnostic]) -> (Vec<&Diagnostic>, Vec<&Diagnostic>) {
+    let mut replace_fixes: Vec<&Diagnostic> = Vec::new();
+    let mut insert_fixes: Vec<&Diagnostic> = Vec::new();
+    let mut seen_replace = std::collections::HashSet::new();
+    let mut seen_insert = std::collections::HashSet::new();
+    for diag in diags {
+        if diag.fix.is_none() {
+            continue;
+        }
+        match diag.fix_kind {
+            FixKind::ReplaceLine => {
+                if seen_replace.insert(diag.line) {
+                    replace_fixes.push(diag);
+                }
+            }
+            FixKind::InsertBefore => {
+                if seen_insert.insert(diag.line) {
+                    insert_fixes.push(diag);
+                }
+            }
+        }
+    }
+    (replace_fixes, insert_fixes)
+}
+
 /// Apply all fixable diagnostics to `source` and return the patched content.
-///
-/// Rules:
-/// - `FixKind::ReplaceLine`: replace the text of the diagnostic's line (1-based) with the fix string
-/// - `FixKind::InsertBefore`: insert the fix string as a new line before the diagnostic's line
 ///
 /// Fixes are deduplicated per `FixKind`: at most one `ReplaceLine` and one `InsertBefore` fix
 /// are applied per line (first-wins within each kind), so both kinds can apply to the same line.
@@ -27,29 +50,7 @@ pub fn apply_fixes(source: &str, diags: &[Diagnostic]) -> String {
     // str::lines() strips both \n and \r\n, so line content is always clean.
     let mut lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
 
-    // Separate into replace and insert kinds, deduplicate by line number (first-wins)
-    let mut replace_fixes: Vec<&Diagnostic> = Vec::new();
-    let mut insert_fixes: Vec<&Diagnostic> = Vec::new();
-    let mut seen_replace: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    let mut seen_insert: std::collections::HashSet<usize> = std::collections::HashSet::new();
-
-    for diag in diags {
-        if diag.fix.is_none() {
-            continue;
-        }
-        match diag.fix_kind {
-            FixKind::ReplaceLine => {
-                if seen_replace.insert(diag.line) {
-                    replace_fixes.push(diag);
-                }
-            }
-            FixKind::InsertBefore => {
-                if seen_insert.insert(diag.line) {
-                    insert_fixes.push(diag);
-                }
-            }
-        }
-    }
+    let (mut replace_fixes, mut insert_fixes) = split_deduplicated_fixes(diags);
 
     // Apply ReplaceLine in reverse order (stable — no index shifting for same-kind)
     replace_fixes.sort_by(|a, b| b.line.cmp(&a.line));
@@ -125,18 +126,8 @@ pub fn fix_file(path: &str, diags: &[Diagnostic]) -> std::io::Result<usize> {
         }
     }
 
-    // Count deduplicated fixes (mirrors apply_fixes first-per-line logic)
-    let mut seen_replace = std::collections::HashSet::new();
-    let mut seen_insert = std::collections::HashSet::new();
-    let applied = fixable
-        .iter()
-        .filter(|d| match d.fix_kind {
-            FixKind::ReplaceLine => seen_replace.insert(d.line),
-            FixKind::InsertBefore => seen_insert.insert(d.line),
-        })
-        .count();
-
-    Ok(applied)
+    let (replace, insert) = split_deduplicated_fixes(diags);
+    Ok(replace.len() + insert.len())
 }
 
 #[cfg(test)]

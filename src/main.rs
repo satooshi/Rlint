@@ -202,21 +202,16 @@ fn main() {
 
     // CLI flags override config file values
     // --select overrides config.select entirely
-    let selected: Option<Vec<String>> = cli.select.as_deref().map(|s| {
-        s.split(',')
-            .map(|r| r.trim().to_string())
-            .filter(|r| !r.is_empty())
-            .collect()
-    });
+    let selected = cli
+        .select
+        .as_deref()
+        .and_then(|s| rlint::linter::parse_rule_list(s));
 
     // --ignore appends to config.ignore
     if let Some(ign_str) = &cli.ignore {
-        let extra: Vec<String> = ign_str
-            .split(',')
-            .map(|r| r.trim().to_string())
-            .filter(|r| !r.is_empty())
-            .collect();
-        config.ignore.extend(extra);
+        if let Some(extra) = rlint::linter::parse_rule_list(ign_str) {
+            config.ignore.extend(extra);
+        }
     }
 
     let mut effective_select = selected.or_else(|| {

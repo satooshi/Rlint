@@ -1,6 +1,16 @@
 use super::{LintContext, Rule};
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::lexer::TokenKind;
+use crate::lexer::{Token, TokenKind};
+
+/// Returns the text of the first non-whitespace token after `start_idx`.
+fn next_name(tokens: &[Token], start_idx: usize) -> String {
+    tokens
+        .iter()
+        .skip(start_idx + 1)
+        .find(|t| !matches!(t.kind, TokenKind::Whitespace))
+        .map(|t| t.text.clone())
+        .unwrap_or_else(|| "<unknown>".into())
+}
 
 /// Complexity rules
 pub struct ComplexityRule {
@@ -33,15 +43,8 @@ impl Rule for ComplexityRule {
         while i < tokens.len() {
             if tokens[i].kind == TokenKind::Def {
                 let def_line = tokens[i].line;
-                // Find method name
-                let name = tokens
-                    .iter()
-                    .skip(i + 1)
-                    .find(|t| !matches!(t.kind, TokenKind::Whitespace))
-                    .map(|t| t.text.clone())
-                    .unwrap_or_else(|| "<unknown>".into());
+                let name = next_name(tokens, i);
 
-                // Find matching `end`
                 let mut depth = 1usize;
                 let mut j = i + 1;
                 while j < tokens.len() && depth > 0 {
@@ -88,12 +91,7 @@ impl Rule for ComplexityRule {
         while i < tokens.len() {
             if tokens[i].kind == TokenKind::Class {
                 let class_line = tokens[i].line;
-                let name = tokens
-                    .iter()
-                    .skip(i + 1)
-                    .find(|t| !matches!(t.kind, TokenKind::Whitespace))
-                    .map(|t| t.text.clone())
-                    .unwrap_or_else(|| "<unknown>".into());
+                let name = next_name(tokens, i);
 
                 let mut depth = 1usize;
                 let mut j = i + 1;
@@ -137,13 +135,7 @@ impl Rule for ComplexityRule {
         while i < tokens.len() {
             if tokens[i].kind == TokenKind::Def {
                 let def_line = tokens[i].line;
-                let name = tokens
-                    .iter()
-                    .skip(i + 1)
-                    .find(|t| !matches!(t.kind, TokenKind::Whitespace))
-                    .map(|t| t.text.clone())
-                    .unwrap_or_else(|| "<unknown>".into());
-
+                let name = next_name(tokens, i);
                 let mut complexity = 1usize;
                 let mut depth = 1usize;
                 let mut j = i + 1;
@@ -170,7 +162,6 @@ impl Rule for ComplexityRule {
                         }
                         _ => {}
                     }
-                    // Count each new block-form if/unless/while/until/for as a branch
                     if matches!(
                         tokens[j].kind,
                         TokenKind::If
