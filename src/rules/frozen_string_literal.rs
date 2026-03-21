@@ -15,7 +15,7 @@ impl Rule for FrozenStringLiteralRule {
             return vec![];
         }
 
-        // Check first two lines (allow shebang on line 1)
+        // Check first three lines (allow shebang and encoding comment before frozen_string_literal)
         let has_frozen = ctx
             .lines
             .iter()
