@@ -91,9 +91,9 @@ impl Suppression {
 
 fn apply_suppressions(diags: &mut Vec<Diagnostic>, tokens: &[crate::lexer::Token]) {
     // Fast path: skip full parsing when no rlint directives exist in the file.
-    let has_directives = tokens.iter().any(|t| {
-        t.kind == TokenKind::Comment && t.text.contains("rlint:")
-    });
+    let has_directives = tokens
+        .iter()
+        .any(|t| t.kind == TokenKind::Comment && t.text.contains("rlint:"));
     if !has_directives {
         return;
     }

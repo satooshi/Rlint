@@ -33,7 +33,11 @@ impl Rule for FrozenStringLiteralRule {
                     let t = l.trim_start_matches('#').trim();
                     t.starts_with("encoding:") || t.starts_with("coding:")
                 });
-                if line2_is_encoding { 3 } else { 2 }
+                if line2_is_encoding {
+                    3
+                } else {
+                    2
+                }
             } else {
                 1
             };
