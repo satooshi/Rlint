@@ -54,6 +54,8 @@ Rules:
   R022  Trailing comma before closing parenthesis
   R023  Too many consecutive blank lines
   R024  Use `puts` instead of `p nil`
+  R025  Missing final newline at end of file
+  R026  Missing blank line between method definitions
   R030  Unbalanced brackets/parentheses/braces
   R031  Missing `end` for block
   R032  Redundant `return` on last line of method
