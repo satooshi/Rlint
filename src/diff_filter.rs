@@ -18,8 +18,9 @@ pub fn parse_diff(diff: &str) -> HashMap<PathBuf, HashSet<usize>> {
             if path_str == "/dev/null" {
                 current_file = None;
             } else {
-                // Strip leading `b/` prefix (git diff format)
+                // Strip leading `b/` prefix (git diff format), then `./` prefix
                 let stripped = path_str.strip_prefix("b/").unwrap_or(path_str);
+                let stripped = stripped.strip_prefix("./").unwrap_or(stripped);
                 current_file = Some(PathBuf::from(stripped));
             }
         } else if line.starts_with("@@ ") {

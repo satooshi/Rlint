@@ -76,6 +76,16 @@ fn main() {
         return;
     }
 
+    // Validate incompatible flag combinations early
+    if cli.diff && cli.watch {
+        eprintln!("Error: --diff and --watch cannot be used together");
+        std::process::exit(1);
+    }
+    if cli.diff && cli.fix {
+        eprintln!("Error: --diff and --fix cannot be used together");
+        std::process::exit(1);
+    }
+
     // Load config from .rblint.toml (walk up from CWD)
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut config = Config::load(&cwd);
@@ -133,7 +143,10 @@ fn main() {
     let diff_changed = if cli.diff {
         use std::io::Read;
         let mut buf = String::new();
-        std::io::stdin().read_to_string(&mut buf).unwrap_or(0);
+        if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
+            eprintln!("Error reading diff from stdin: {e}");
+            std::process::exit(1);
+        }
         Some(diff_filter::parse_diff(&buf))
     } else {
         None
@@ -211,8 +224,8 @@ max-parameters = 5
 # Additional rules to enable beyond defaults
 # extend-select = []
 
-# Paths/globs to exclude from linting
-exclude = ["vendor/**", "node_modules/**", ".git/**"]
+# Paths/globs to exclude from linting (default: empty)
+# exclude = ["vendor/**", "node_modules/**"]
 "#
     .to_string()
 }

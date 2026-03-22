@@ -111,6 +111,14 @@ pub fn run_lint_pass(
     let mut fixed_files: Vec<String> = Vec::new();
     if cli_fix {
         for (path, diags) in &all_diags {
+            // When a diff filter is active, only fix files that appear in the diff
+            if let Some(filter) = diff_filter {
+                let normalized = normalize_path(path);
+                let file_path = std::path::PathBuf::from(&normalized);
+                if !filter.contains_key(&file_path) {
+                    continue;
+                }
+            }
             match rblint::fixer::fix_file(path, diags) {
                 Ok(0) => {}
                 Ok(n) => {
@@ -150,7 +158,8 @@ pub fn run_lint_pass(
         .filter(|d| !cli_errors_only || d.severity == Severity::Error)
         .filter(|d| {
             if let Some(filter) = diff_filter {
-                let file_path = std::path::PathBuf::from(&d.file);
+                let normalized = normalize_path(&d.file);
+                let file_path = std::path::PathBuf::from(&normalized);
                 filter
                     .get(&file_path)
                     .map(|lines| lines.contains(&d.line))
@@ -182,6 +191,14 @@ pub fn run_lint_pass(
     }
 
     flat_diags.iter().any(|d| d.severity == Severity::Error)
+}
+
+/// Normalize a file path string for consistent lookup in the diff filter map.
+/// Converts backslashes to forward slashes and strips a leading `./` prefix.
+fn normalize_path(s: &str) -> String {
+    let s = s.replace('\\', "/");
+    let s = s.strip_prefix("./").unwrap_or(&s).to_string();
+    s
 }
 
 pub fn print_statistics(diags: &[Diagnostic]) {
