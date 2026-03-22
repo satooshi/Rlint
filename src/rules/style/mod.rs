@@ -1,0 +1,15 @@
+mod r020_semicolon;
+mod r021_operator_spacing;
+mod r022_trailing_comma;
+mod r023_blank_lines;
+mod r024_p_nil;
+mod r025_final_newline;
+mod r026_method_spacing;
+
+pub use r020_semicolon::SemicolonRule;
+pub use r021_operator_spacing::OperatorSpacingRule;
+pub use r022_trailing_comma::TrailingCommaRule;
+pub use r023_blank_lines::BlankLinesRule;
+pub use r024_p_nil::PNilRule;
+pub use r025_final_newline::FinalNewlineRule;
+pub use r026_method_spacing::MethodSpacingRule;
