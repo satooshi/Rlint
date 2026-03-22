@@ -89,6 +89,9 @@ pub fn run_lint_pass(
     cli_statistics: bool,
     cache: Option<&RwLock<Cache>>,
     config_hash: u64,
+    diff_filter: Option<
+        &std::collections::HashMap<std::path::PathBuf, std::collections::HashSet<usize>>,
+    >,
 ) -> bool {
     let start = Instant::now();
 
@@ -108,6 +111,14 @@ pub fn run_lint_pass(
     let mut fixed_files: Vec<String> = Vec::new();
     if cli_fix {
         for (path, diags) in &all_diags {
+            // When a diff filter is active, only fix files that appear in the diff
+            if let Some(filter) = diff_filter {
+                let normalized = normalize_path(path);
+                let file_path = std::path::PathBuf::from(&normalized);
+                if !filter.contains_key(&file_path) {
+                    continue;
+                }
+            }
             match rblint::fixer::fix_file(path, diags) {
                 Ok(0) => {}
                 Ok(n) => {
@@ -145,6 +156,18 @@ pub fn run_lint_pass(
         .iter()
         .flat_map(|(_, d)| d.iter())
         .filter(|d| !cli_errors_only || d.severity == Severity::Error)
+        .filter(|d| {
+            if let Some(filter) = diff_filter {
+                let normalized = normalize_path(&d.file);
+                let file_path = std::path::PathBuf::from(&normalized);
+                filter
+                    .get(&file_path)
+                    .map(|lines| lines.contains(&d.line))
+                    .unwrap_or(false)
+            } else {
+                true
+            }
+        })
         .cloned()
         .collect();
     flat_diags.sort_by(|a, b| {
@@ -168,6 +191,14 @@ pub fn run_lint_pass(
     }
 
     flat_diags.iter().any(|d| d.severity == Severity::Error)
+}
+
+/// Normalize a file path string for consistent lookup in the diff filter map.
+/// Converts backslashes to forward slashes and strips a leading `./` prefix.
+fn normalize_path(s: &str) -> String {
+    let s = s.replace('\\', "/");
+    let s = s.strip_prefix("./").unwrap_or(&s).to_string();
+    s
 }
 
 pub fn print_statistics(diags: &[Diagnostic]) {
