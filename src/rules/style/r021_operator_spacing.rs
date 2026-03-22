@@ -60,6 +60,35 @@ impl Rule for OperatorSpacingRule {
                     }
                 }
 
+                // Exclude unary operators: Plus, Minus, Star used as unary/splat.
+                // A unary operator is one not preceded by a value-producing token.
+                if matches!(
+                    tok.kind,
+                    TokenKind::Plus | TokenKind::Minus | TokenKind::Star
+                ) {
+                    let prev_real = tokens[..i]
+                        .iter()
+                        .rev()
+                        .find(|t| t.kind != TokenKind::Whitespace && t.kind != TokenKind::Newline);
+                    let is_binary = prev_real.is_some_and(|t| {
+                        matches!(
+                            t.kind,
+                            TokenKind::Ident
+                                | TokenKind::Constant
+                                | TokenKind::Integer
+                                | TokenKind::Float
+                                | TokenKind::StringLiteral
+                                | TokenKind::RParen
+                                | TokenKind::RBracket
+                                | TokenKind::RBrace
+                        )
+                    });
+                    if !is_binary {
+                        i += 1;
+                        continue;
+                    }
+                }
+
                 let prev = &tokens[i - 1];
                 let next = tokens.get(i + 1);
 
@@ -291,5 +320,26 @@ mod tests {
         let diags = check("x==y");
         let fix = fix_for_rule(&diags, "R021").expect("should have fix");
         assert_eq!(fix, "x == y");
+    }
+
+    #[test]
+    fn no_violation_unary_minus() {
+        // x = -1  → no R021
+        let diags = check("x = -1");
+        assert!(!has_rule(&diags, "R021"));
+    }
+
+    #[test]
+    fn no_violation_unary_plus() {
+        // foo(+bar)  → no R021
+        let diags = check("foo(+bar)");
+        assert!(!has_rule(&diags, "R021"));
+    }
+
+    #[test]
+    fn no_violation_splat() {
+        // call(*args)  → no R021
+        let diags = check("call(*args)");
+        assert!(!has_rule(&diags, "R021"));
     }
 }

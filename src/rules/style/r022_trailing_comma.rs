@@ -20,11 +20,12 @@ impl Rule for TrailingCommaRule {
 
             if tok.kind == TokenKind::Comma {
                 if let Some(next) = tokens.get(i + 1) {
-                    let real_next = if next.kind == TokenKind::Whitespace {
-                        tokens.get(i + 2)
-                    } else {
-                        Some(next)
-                    };
+                    let real_next =
+                        if next.kind == TokenKind::Whitespace || next.kind == TokenKind::Newline {
+                            tokens.get(i + 2)
+                        } else {
+                            Some(next)
+                        };
                     if let Some(rn) = real_next {
                         if rn.kind == TokenKind::RParen {
                             diags.push(Diagnostic::new(
@@ -73,5 +74,13 @@ mod tests {
     fn no_violation_no_trailing_comma() {
         let diags = check("foo(a, b)");
         assert!(!has_rule(&diags, "R022"));
+    }
+
+    #[test]
+    fn violation_trailing_comma_before_rparen_multiline() {
+        // foo(a, b,
+        // )  ← should trigger R022
+        let diags = check("foo(a, b,\n)");
+        assert!(has_rule(&diags, "R022"), "{diags:?}");
     }
 }

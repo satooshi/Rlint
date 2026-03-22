@@ -17,10 +17,26 @@ impl Rule for PNilRule {
         for (i, tok) in tokens.iter().enumerate() {
             if tok.kind == TokenKind::Ident && tok.text == "p" {
                 if let Some(next) = tokens.get(i + 1) {
-                    let is_nil = if next.kind == TokenKind::Whitespace {
+                    let is_nil = if next.kind == TokenKind::Nil {
+                        // `p nil`
+                        true
+                    } else if next.kind == TokenKind::Whitespace {
+                        // `p nil` (with space) or `p (nil)` (space then paren)
+                        match tokens.get(i + 2) {
+                            Some(t) if t.kind == TokenKind::Nil => true,
+                            Some(t) if t.kind == TokenKind::LParen => {
+                                // `p (nil)`: skip LParen, check for Nil
+                                tokens
+                                    .get(i + 3)
+                                    .is_some_and(|t2| t2.kind == TokenKind::Nil)
+                            }
+                            _ => false,
+                        }
+                    } else if next.kind == TokenKind::LParen {
+                        // `p(nil)`: LParen directly after `p`
                         tokens.get(i + 2).is_some_and(|t| t.kind == TokenKind::Nil)
                     } else {
-                        next.kind == TokenKind::Nil
+                        false
                     };
                     if is_nil {
                         diags.push(Diagnostic::new(
@@ -72,5 +88,19 @@ mod tests {
     fn no_violation_puts() {
         let diags = check("puts");
         assert!(!has_rule(&diags, "R024"));
+    }
+
+    #[test]
+    fn violation_p_paren_nil() {
+        // p(nil) should trigger R024
+        let diags = check("p(nil)");
+        assert!(has_rule(&diags, "R024"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_p_space_paren_nil() {
+        // p (nil) should trigger R024
+        let diags = check("p (nil)");
+        assert!(has_rule(&diags, "R024"), "{diags:?}");
     }
 }

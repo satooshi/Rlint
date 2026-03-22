@@ -25,7 +25,13 @@ pub fn lint_files(
     files
         .par_iter()
         .filter_map(|path| {
-            let source = std::fs::read_to_string(path).ok()?;
+            let source = match std::fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Warning: could not read {}: {}", path, e);
+                    return None;
+                }
+            };
             let content_hash = hash_content(&source);
 
             // Attempt cache lookup (read lock for lookup, write lock only on miss)

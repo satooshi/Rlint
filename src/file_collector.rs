@@ -46,7 +46,17 @@ pub fn collect_ruby_files(paths: &[String], exclude: &[glob::Pattern]) -> Vec<St
                             || name == "Guardfile"
                         {
                             let raw = p.to_string_lossy();
-                            let path_str = normalize_path(&raw);
+                            // If the path is absolute, convert to a CWD-relative path so that
+                            // exclude patterns like "vendor/**" can match correctly.
+                            let relative: String = if p.is_absolute() {
+                                let cwd = std::env::current_dir().unwrap_or_default();
+                                p.strip_prefix(&cwd)
+                                    .map(|r| r.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|_| raw.into_owned())
+                            } else {
+                                raw.into_owned()
+                            };
+                            let path_str = normalize_path(&relative);
                             if !is_excluded(path_str, exclude) {
                                 files.push(path_str.to_string());
                             }
