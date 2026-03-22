@@ -1,6 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use colored::Colorize;
-use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutputFormat {
@@ -9,6 +8,42 @@ pub enum OutputFormat {
     Github, // GitHub Actions annotation format
     Sarif,  // SARIF v2.1.0 for GitHub Code Scanning
 }
+
+/// Static list of all known rules: (code, short description).
+const ALL_RULES: &[(&str, &str)] = &[
+    ("R001", "Line too long"),
+    ("R002", "Trailing whitespace"),
+    ("R003", "Missing frozen_string_literal magic comment"),
+    ("R010", "Method name not in snake_case"),
+    ("R011", "Constant not starting with uppercase"),
+    ("R012", "Variable using camelCase instead of snake_case"),
+    ("R013", "Class/module name not CamelCase"),
+    ("R020", "Semicolon used to separate statements"),
+    ("R021", "Missing space around operator"),
+    ("R022", "Trailing comma before closing parenthesis"),
+    ("R023", "Too many consecutive blank lines"),
+    ("R024", "Use puts instead of p nil"),
+    ("R025", "Missing final newline at end of file"),
+    ("R026", "Missing blank line between method definitions"),
+    ("R027", "Empty method body"),
+    ("R028", "Use unless instead of if !condition"),
+    ("R029", "Double negation"),
+    ("R033", "Redundant self. on method call"),
+    ("R030", "Unbalanced brackets/parentheses/braces"),
+    ("R031", "Missing end for block"),
+    ("R032", "Redundant return on last line of method"),
+    ("R034", "Empty rescue body"),
+    ("R035", "Unreachable code after return/raise"),
+    ("R040", "Method too long"),
+    ("R041", "Class too long"),
+    ("R042", "High cyclomatic complexity"),
+    ("R043", "Too many method parameters"),
+    ("R050", "Usage of eval with string argument"),
+    ("R051", "Hardcoded credentials"),
+    ("R052", "Dynamic send/public_send"),
+    ("R053", "Shell injection risk"),
+    ("R054", "Unsafe deserialization"),
+];
 
 pub struct Reporter {
     pub format: OutputFormat,
@@ -76,21 +111,29 @@ impl Reporter {
     }
 
     fn print_sarif(&self, diags: &[Diagnostic]) {
-        // Collect unique rules in stable order (BTreeMap sorts by key)
-        let mut rules_map: BTreeMap<&str, &str> = BTreeMap::new();
-        for d in diags {
-            rules_map.entry(d.rule).or_insert_with(|| rule_name(d.rule));
-        }
-
-        let rules: Vec<serde_json::Value> = rules_map
+        // Determine the current working directory as a file:// URI with trailing slash
+        let cwd_uri = std::env::current_dir()
+            .map(|p| {
+                let mut s = p.to_string_lossy().replace('\\', "/");
+                if !s.starts_with('/') {
+                    s.insert(0, '/');
+                }
+                if !s.ends_with('/') {
+                    s.push('/');
+                }
+                format!("file://{}", s)
+            })
+            .unwrap_or_else(|_| "file:///".to_string());
+        // Build driver.rules from the full static rule list
+        let rules: Vec<serde_json::Value> = ALL_RULES
             .iter()
-            .map(|(id, name)| {
+            .map(|(id, _desc)| {
                 serde_json::json!({
                     "id": id,
-                    "name": name,
+                    "name": rule_name(id),
                     "shortDescription": { "text": rule_short_description(id) },
                     "helpUri": format!(
-                        "https://github.com/your-repo/rblint/blob/main/docs/rules/{}.md",
+                        "https://github.com/satooshi/Rblint/blob/main/docs/rules/{}.md",
                         id
                     ),
                     "defaultConfiguration": {
@@ -141,8 +184,13 @@ impl Reporter {
                         "driver": {
                             "name": "rblint",
                             "version": env!("CARGO_PKG_VERSION"),
-                            "informationUri": "https://github.com/your-repo/rblint",
+                            "informationUri": "https://github.com/satooshi/Rblint",
                             "rules": rules
+                        }
+                    },
+                    "originalUriBaseIds": {
+                        "%SRCROOT%": {
+                            "uri": cwd_uri
                         }
                     },
                     "results": results
@@ -207,6 +255,7 @@ fn rule_name(code: &str) -> &'static str {
         "R010" => "MethodNameNotSnakeCase",
         "R011" => "ConstantNotUppercase",
         "R012" => "VariableCamelCase",
+        "R013" => "ClassModuleNameNotCamelCase",
         "R020" => "SemicolonSeparatedStatements",
         "R021" => "MissingSpaceAroundOperator",
         "R022" => "TrailingCommaBeforeClosingParen",
@@ -214,12 +263,24 @@ fn rule_name(code: &str) -> &'static str {
         "R024" => "UsePutsInsteadOfPNil",
         "R025" => "MissingFinalNewline",
         "R026" => "MissingBlankLineBetweenMethods",
+        "R027" => "EmptyMethodBody",
+        "R028" => "UseUnlessInsteadOfIfNot",
+        "R029" => "DoubleNegation",
         "R030" => "UnbalancedBrackets",
         "R031" => "MissingEnd",
         "R032" => "RedundantReturn",
+        "R033" => "RedundantSelf",
+        "R034" => "EmptyRescueBody",
+        "R035" => "UnreachableCode",
         "R040" => "MethodTooLong",
         "R041" => "ClassTooLong",
         "R042" => "HighCyclomaticComplexity",
+        "R043" => "TooManyMethodParameters",
+        "R050" => "EvalWithStringArgument",
+        "R051" => "HardcodedCredentials",
+        "R052" => "DynamicSend",
+        "R053" => "ShellInjectionRisk",
+        "R054" => "UnsafeDeserialization",
         _ => "UnknownRule",
     }
 }
@@ -233,6 +294,7 @@ fn rule_short_description(code: &str) -> &'static str {
         "R010" => "Method name not in snake_case",
         "R011" => "Constant not starting with uppercase",
         "R012" => "Variable using camelCase instead of snake_case",
+        "R013" => "Class/module name not CamelCase",
         "R020" => "Semicolon used to separate statements",
         "R021" => "Missing space around operator",
         "R022" => "Trailing comma before closing parenthesis",
@@ -240,12 +302,24 @@ fn rule_short_description(code: &str) -> &'static str {
         "R024" => "Use `puts` instead of `p nil`",
         "R025" => "Missing final newline at end of file",
         "R026" => "Missing blank line between method definitions",
+        "R027" => "Empty method body",
+        "R028" => "Use unless instead of if !condition",
+        "R029" => "Double negation",
         "R030" => "Unbalanced brackets/parentheses/braces",
         "R031" => "Missing `end` for block",
         "R032" => "Redundant `return` on last line of method",
+        "R033" => "Redundant self. on method call",
+        "R034" => "Empty rescue body",
+        "R035" => "Unreachable code after return/raise",
         "R040" => "Method too long",
         "R041" => "Class too long",
         "R042" => "High cyclomatic complexity",
+        "R043" => "Too many method parameters",
+        "R050" => "Usage of eval with string argument",
+        "R051" => "Hardcoded credentials",
+        "R052" => "Dynamic send/public_send",
+        "R053" => "Shell injection risk",
+        "R054" => "Unsafe deserialization",
         _ => "Unknown rule",
     }
 }
@@ -254,9 +328,9 @@ fn rule_short_description(code: &str) -> &'static str {
 fn rule_default_level(code: &str) -> &'static str {
     match code {
         // Errors
-        "R030" | "R031" => "error",
+        "R030" | "R031" | "R050" | "R051" | "R052" | "R053" | "R054" => "error",
         // Notes / info
-        "R003" | "R025" | "R032" => "note",
+        "R003" | "R025" | "R027" | "R032" | "R033" => "note",
         // Everything else is a warning
         _ => "warning",
     }
