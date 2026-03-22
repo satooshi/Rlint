@@ -50,6 +50,16 @@ impl Rule for NamingRule {
                 while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
                     j += 1;
                 }
+                // Allow root-qualified declarations like `class ::Foo::Bar`
+                if tokens
+                    .get(j)
+                    .is_some_and(|t| t.kind == TokenKind::ColonColon)
+                {
+                    j += 1;
+                    while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+                        j += 1;
+                    }
+                }
                 // Walk through all name segments separated by ::
                 loop {
                     let Some(name_tok) = tokens.get(j) else {
@@ -292,5 +302,19 @@ mod tests {
     fn no_violation_deeply_qualified_camel_case() {
         let diags = check("module Foo::Bar::Baz\nend");
         assert!(!rules_in(&diags).contains(&"R013"), "{diags:?}");
+    }
+
+    #[test]
+    fn no_violation_root_qualified_camel_case() {
+        // `class ::Foo` is root-qualified and valid CamelCase
+        let diags = check("class ::Foo\nend");
+        assert!(!rules_in(&diags).contains(&"R013"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_root_qualified_not_camel_case() {
+        // `module ::foo_bar` — leading `::` but non-CamelCase
+        let diags = check("module ::foo_bar\nend");
+        assert!(rules_in(&diags).contains(&"R013"), "{diags:?}");
     }
 }

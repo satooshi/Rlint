@@ -158,6 +158,21 @@ impl Rule for SyntaxRule {
             let mut i = 0;
             while i < tokens.len() {
                 if tokens[i].kind == TokenKind::Rescue {
+                    // Distinguish clause rescue from modifier rescue.
+                    // A clause rescue follows a newline (or is at file start);
+                    // a modifier rescue (`expr rescue fallback`) follows an expression.
+                    let prev_non_ws = (0..i)
+                        .rev()
+                        .find(|&k| tokens[k].kind != TokenKind::Whitespace)
+                        .map(|k| &tokens[k]);
+                    let is_clause = match prev_non_ws {
+                        None => true,
+                        Some(p) => matches!(p.kind, TokenKind::Newline),
+                    };
+                    if !is_clause {
+                        i += 1;
+                        continue;
+                    }
                     let rescue_line = tokens[i].line;
                     // Skip past the rescue line (exception class list, etc.)
                     let mut j = i + 1;
@@ -476,5 +491,20 @@ mod tests {
         let src = "def foo\n  raise \"err\"\n  do_work\nend";
         let diags = check(src);
         assert!(has_rule(&diags, "R035"), "{diags:?}");
+    }
+
+    #[test]
+    fn no_violation_modifier_rescue() {
+        // `expr rescue fallback` is a modifier form — NOT an empty rescue clause
+        let src = "def foo\n  result = danger rescue nil\nend\n";
+        let diags = check(src);
+        assert!(!has_rule(&diags, "R034"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_empty_rescue_clause() {
+        let src = "begin\n  danger\nrescue\nend\n";
+        let diags = check(src);
+        assert!(has_rule(&diags, "R034"), "{diags:?}");
     }
 }

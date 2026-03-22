@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::lexer::TokenKind;
 use crate::rules::{LintContext, Rule};
@@ -18,6 +20,9 @@ impl Rule for RedundantSelfRule {
         // (i.e. inside a `def` that is NOT `def self.foo`)
         let mut method_depth = 0usize;
         let mut block_depth = 0usize; // overall block depth for nesting
+                                      // Track local variable names per method scope. When a local `foo` is in scope,
+                                      // `self.foo` is NOT redundant because bare `foo` would resolve to the local.
+        let mut locals_stack: Vec<HashSet<String>> = Vec::new();
 
         let mut i = 0;
         while i < tokens.len() {
@@ -35,6 +40,7 @@ impl Rule for RedundantSelfRule {
                     block_depth += 1;
                     if !is_class_method {
                         method_depth += 1;
+                        locals_stack.push(HashSet::new());
                     }
                 }
                 TokenKind::Class | TokenKind::Module | TokenKind::Do | TokenKind::Begin => {
@@ -62,6 +68,27 @@ impl Rule for RedundantSelfRule {
                     block_depth = block_depth.saturating_sub(1);
                     if method_depth > 0 && block_depth < method_depth {
                         method_depth -= 1;
+                        locals_stack.pop();
+                    }
+                }
+                TokenKind::Ident => {
+                    // Track local variable assignments: `foo = ...` (but not `foo == ...`)
+                    if method_depth > 0 {
+                        let next_meaningful = (i + 1..tokens.len())
+                            .find(|&k| tokens[k].kind != TokenKind::Whitespace);
+                        if let Some(nxt) = next_meaningful {
+                            if tokens[nxt].kind == TokenKind::Eq {
+                                // Check it's not `==`
+                                let after_eq = tokens.get(nxt + 1);
+                                let is_eq_eq =
+                                    after_eq.map(|t| t.kind == TokenKind::Eq) == Some(true);
+                                if !is_eq_eq {
+                                    if let Some(locals) = locals_stack.last_mut() {
+                                        locals.insert(tokens[i].text.clone());
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 TokenKind::Self_ => {
@@ -95,7 +122,13 @@ impl Rule for RedundantSelfRule {
                         let is_setter =
                             after_name < tokens.len() && tokens[after_name].kind == TokenKind::Eq;
 
-                        if !is_setter {
+                        // If a local variable with the same name is in scope,
+                        // `self.foo` is required to distinguish from the local.
+                        let has_same_name_local = locals_stack
+                            .last()
+                            .map_or(false, |s| s.contains(name_tok.text.as_str()));
+
+                        if !is_setter && !has_same_name_local {
                             // Build the fix: remove `self.` from the line
                             let line_text = ctx
                                 .lines
@@ -173,5 +206,19 @@ mod tests {
         let d = diags.iter().find(|d| d.rule == "R033").unwrap();
         let fix = d.fix.as_deref().unwrap_or("");
         assert!(fix.contains("bar") && !fix.contains("self."), "fix: {fix}");
+    }
+
+    #[test]
+    fn no_violation_self_when_local_shadows_method() {
+        // `bar = 1` introduces a local; `self.bar` is now required to call the method
+        let src = "def foo\n  bar = 1\n  self.bar\nend\n";
+        assert!(!has_rule(&check(src), "R033"), "{:?}", check(src));
+    }
+
+    #[test]
+    fn violation_self_when_no_local_shadows() {
+        // No local `bar` in scope — `self.bar` is redundant
+        let src = "def foo\n  self.bar\nend\n";
+        assert!(has_rule(&check(src), "R033"), "{:?}", check(src));
     }
 }
