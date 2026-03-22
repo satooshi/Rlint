@@ -18,7 +18,10 @@ pub use complexity::ComplexityRule;
 pub use frozen_string_literal::FrozenStringLiteralRule;
 pub use line_length::LineLengthRule;
 pub use naming::NamingRule;
-pub use style::StyleRule;
+pub use style::{
+    BlankLinesRule, FinalNewlineRule, MethodSpacingRule, OperatorSpacingRule, PNilRule,
+    SemicolonRule, TrailingCommaRule,
+};
 pub use syntax::SyntaxRule;
 pub use trailing_whitespace::TrailingWhitespaceRule;
 
@@ -69,7 +72,13 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn Rule + Send + Sync>> {
         Box::new(TrailingWhitespaceRule),
         Box::new(FrozenStringLiteralRule),
         Box::new(NamingRule),
-        Box::new(StyleRule),
+        Box::new(SemicolonRule),       // R020
+        Box::new(OperatorSpacingRule), // R021
+        Box::new(TrailingCommaRule),   // R022
+        Box::new(BlankLinesRule),      // R023
+        Box::new(PNilRule),            // R024
+        Box::new(FinalNewlineRule),    // R025
+        Box::new(MethodSpacingRule),   // R026
         Box::new(SyntaxRule),
         Box::new(ComplexityRule {
             max_method_lines: config.max_method_lines,

@@ -7,4 +7,5 @@ pub mod linter;
 pub mod reporter;
 pub mod rubocop_compat;
 pub mod rules;
+pub(crate) mod suppression;
 pub mod tree;
