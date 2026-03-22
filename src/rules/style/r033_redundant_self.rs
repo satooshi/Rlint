@@ -16,12 +16,15 @@ impl Rule for RedundantSelfRule {
         let mut diags = Vec::new();
         let tokens = ctx.tokens;
 
-        // Stack-based block tracking: each entry is true if the block is an
-        // instance method def (non-class-method). This correctly handles
-        // `class C; def foo; end; self.bar; end` — when def's `end` is popped,
-        // the remaining stack only has the `class` entry (false), so method
-        // scope is cleared correctly.
-        let mut block_stack: Vec<bool> = Vec::new();
+        // Stack-based block tracking:
+        //   Some(true)  = instance method def  (`def foo`)
+        //   Some(false) = class/singleton def  (`def self.foo`)
+        //   None        = other block           (class, module, do, begin, if, …)
+        //
+        // To check "are we inside an instance method?", find the innermost
+        // Some(_) entry; only fire R033 when that entry is Some(true).
+        // This correctly handles nested defs like `def foo; def self.bar; self.baz; end; end`.
+        let mut block_stack: Vec<Option<bool>> = Vec::new();
 
         // Track local variable names per instance-method scope.
         // When a local `foo` is in scope, `self.foo` is NOT redundant because
@@ -41,14 +44,13 @@ impl Rule for RedundantSelfRule {
                         && tokens[j].kind == TokenKind::Self_
                         && tokens.get(j + 1).map(|t| t.kind == TokenKind::Dot) == Some(true);
 
-                    let is_instance_method = !is_class_method;
-                    block_stack.push(is_instance_method);
-                    if is_instance_method {
+                    block_stack.push(Some(!is_class_method));
+                    if !is_class_method {
                         locals_stack.push(HashSet::new());
                     }
                 }
                 TokenKind::Class | TokenKind::Module | TokenKind::Do | TokenKind::Begin => {
-                    block_stack.push(false);
+                    block_stack.push(None);
                 }
                 TokenKind::If
                 | TokenKind::Unless
@@ -65,19 +67,26 @@ impl Rule for RedundantSelfRule {
                         Some(p) => matches!(p.kind, TokenKind::Newline),
                     };
                     if at_statement_start {
-                        block_stack.push(false);
+                        block_stack.push(None);
                     }
                 }
                 TokenKind::End => {
-                    if let Some(was_instance_method) = block_stack.pop() {
-                        if was_instance_method {
+                    if let Some(entry) = block_stack.pop() {
+                        if entry == Some(true) {
                             locals_stack.pop();
                         }
                     }
                 }
                 TokenKind::Ident => {
                     // Track local variable assignments: `foo = ...` (but not `foo == ...`)
-                    let in_method = block_stack.iter().any(|&b| b);
+                    // Only track when the innermost enclosing def is an instance method.
+                    let in_method = block_stack
+                        .iter()
+                        .rev()
+                        .find(|b| b.is_some())
+                        .copied()
+                        .flatten()
+                        == Some(true);
                     if in_method {
                         let next_meaningful = (i + 1..tokens.len())
                             .find(|&k| tokens[k].kind != TokenKind::Whitespace);
@@ -97,9 +106,15 @@ impl Rule for RedundantSelfRule {
                     }
                 }
                 TokenKind::Self_ => {
-                    // Only flag when directly inside an instance method scope
-                    // (the innermost enclosing def must be an instance method)
-                    let in_method = block_stack.iter().rev().any(|&b| b);
+                    // Only flag when the innermost enclosing def is an instance method.
+                    // `any()` would incorrectly fire inside `def self.bar` nested in `def foo`.
+                    let in_method = block_stack
+                        .iter()
+                        .rev()
+                        .find(|b| b.is_some())
+                        .copied()
+                        .flatten()
+                        == Some(true);
                     if !in_method {
                         i += 1;
                         continue;
@@ -243,6 +258,14 @@ mod tests {
     fn no_violation_after_method_ends() {
         // After def foo; end, we're back in class scope — `self.bar` is needed
         let src = "class C\n  def foo\n  end\n  self.bar\nend\n";
+        assert!(!has_rule(&check(src), "R033"), "{:?}", check(src));
+    }
+
+    #[test]
+    fn no_violation_nested_singleton_method() {
+        // `def self.bar` inside `def foo` — innermost def is a class method,
+        // so `self.baz` inside it is required and must NOT be flagged
+        let src = "def foo\n  def self.bar\n    self.baz\n  end\nend\n";
         assert!(!has_rule(&check(src), "R033"), "{:?}", check(src));
     }
 
