@@ -25,14 +25,14 @@ impl Rule for EvalUsageRule {
             if !EVAL_NAMES.contains(&name) {
                 continue;
             }
-            // Must be followed by `(` or a string literal (method call context)
+            // Must be followed by `(`, a string literal, or an identifier (bare call)
             let j = i + 1;
             let next_meaningful = (j..tokens.len())
-                .find(|&k| tokens[k].kind != TokenKind::Whitespace)
+                .find(|&k| !matches!(tokens[k].kind, TokenKind::Whitespace | TokenKind::Newline))
                 .map(|k| &tokens[k]);
             if matches!(
                 next_meaningful.map(|t| &t.kind),
-                Some(TokenKind::LParen) | Some(TokenKind::StringLiteral)
+                Some(TokenKind::LParen) | Some(TokenKind::StringLiteral) | Some(TokenKind::Ident)
             ) {
                 diags.push(Diagnostic::new(
                     ctx.file,
@@ -95,18 +95,22 @@ impl Rule for HardcodedCredentialsRule {
                 continue;
             }
 
-            // Skip whitespace to find `=`
+            // Skip whitespace/newline to find `=`
             let mut j = i + 1;
-            while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+            while j < tokens.len()
+                && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline)
+            {
                 j += 1;
             }
             if j >= tokens.len() || tokens[j].kind != TokenKind::Eq {
                 i += 1;
                 continue;
             }
-            // Skip whitespace to find RHS
+            // Skip whitespace/newline to find RHS
             let mut k = j + 1;
-            while k < tokens.len() && tokens[k].kind == TokenKind::Whitespace {
+            while k < tokens.len()
+                && matches!(tokens[k].kind, TokenKind::Whitespace | TokenKind::Newline)
+            {
                 k += 1;
             }
             if k >= tokens.len() || tokens[k].kind != TokenKind::StringLiteral {
@@ -177,7 +181,9 @@ impl Rule for DynamicSendRule {
             if tokens[j].kind == TokenKind::LParen {
                 // paren form: send(expr) or obj.send(expr)
                 j += 1;
-                while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+                while j < tokens.len()
+                    && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline)
+                {
                     j += 1;
                 }
                 // If the first argument is NOT a symbol (`:name`), it's dynamic
@@ -223,8 +229,9 @@ impl Rule for ShellInjectionRule {
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
         let mut diags = Vec::new();
+        let tokens = ctx.tokens;
 
-        // Line-level detection: look for shell command patterns with string interpolation
+        // Line-based detection for backtick, %x, IO.popen, Open3 (always single-string contexts)
         for (idx, line) in ctx.lines.iter().enumerate() {
             let line_no = idx + 1;
             let trimmed = line.trim();
@@ -234,9 +241,7 @@ impl Rule for ShellInjectionRule {
                 continue;
             }
 
-            let has_interpolation = line.contains("#{");
-
-            if !has_interpolation {
+            if !line.contains("#{") {
                 continue;
             }
 
@@ -266,8 +271,9 @@ impl Rule for ShellInjectionRule {
                 continue;
             }
 
-            // `system(...)` or `exec(...)` or `spawn(...)` with interpolation in string arg
-            for cmd in &["system(", "exec(", "spawn(", "IO.popen(", "Open3."] {
+            // IO.popen / Open3 with interpolation (line-based; array-form false positives
+            // are uncommon for these APIs so line-level detection is acceptable)
+            for cmd in &["IO.popen(", "Open3."] {
                 if line.contains(cmd) {
                     diags.push(Diagnostic::new(
                         ctx.file,
@@ -279,6 +285,57 @@ impl Rule for ShellInjectionRule {
                     ));
                     break;
                 }
+            }
+        }
+
+        // Token-based detection for system/exec/spawn: handles both paren and no-paren forms
+        // and correctly ignores array arguments (only flags when the first string arg has #{}).
+        const SHELL_METHODS: &[&str] = &["system", "exec", "spawn"];
+        for i in 0..tokens.len() {
+            if tokens[i].kind != TokenKind::Ident {
+                continue;
+            }
+            let name = tokens[i].text.as_str();
+            if !SHELL_METHODS.contains(&name) {
+                continue;
+            }
+
+            // Find what immediately follows the method name
+            let mut j = i + 1;
+            while j < tokens.len()
+                && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline)
+            {
+                j += 1;
+            }
+            if j >= tokens.len() {
+                continue;
+            }
+
+            // Unwrap optional parenthesis to reach the first argument
+            if tokens[j].kind == TokenKind::LParen {
+                j += 1;
+                while j < tokens.len()
+                    && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline)
+                {
+                    j += 1;
+                }
+            }
+
+            // Flag only when the first argument is a string literal containing interpolation.
+            // This correctly skips array forms like system("cmd", "#{arg}") because the first
+            // arg "cmd" does not contain #{.
+            if j < tokens.len()
+                && tokens[j].kind == TokenKind::StringLiteral
+                && tokens[j].text.contains("#{")
+            {
+                diags.push(Diagnostic::new(
+                    ctx.file,
+                    tokens[i].line,
+                    tokens[i].col,
+                    "R053",
+                    format!("`{name}` with interpolated string argument is a shell injection risk — use array form to avoid shell expansion"),
+                    Severity::Warning,
+                ));
             }
         }
 
@@ -395,6 +452,22 @@ mod tests {
     }
 
     #[test]
+    fn violation_eval_bare_call() {
+        let src = "eval user_input\n";
+        assert!(
+            has_rule(&check_rule(&EvalUsageRule, src), "R050"),
+            "{:?}",
+            check_rule(&EvalUsageRule, src)
+        );
+    }
+
+    #[test]
+    fn violation_instance_eval_bare_call() {
+        let src = "obj.instance_eval code\n";
+        assert!(has_rule(&check_rule(&EvalUsageRule, src), "R050"));
+    }
+
+    #[test]
     fn no_violation_eval_identifier() {
         // `eval` used as a variable name should not trigger
         let src = "result = some_eval\n";
@@ -435,6 +508,16 @@ mod tests {
     fn violation_hardcoded_class_variable_password() {
         // Class variables (@@password) should also be detected
         let src = "@@password = \"secret123\"\n";
+        assert!(
+            has_rule(&check_rule(&HardcodedCredentialsRule, src), "R051"),
+            "{:?}",
+            check_rule(&HardcodedCredentialsRule, src)
+        );
+    }
+
+    #[test]
+    fn violation_hardcoded_password_multiline() {
+        let src = "password =\n  \"secret123\"\n";
         assert!(
             has_rule(&check_rule(&HardcodedCredentialsRule, src), "R051"),
             "{:?}",
@@ -517,6 +600,13 @@ mod tests {
         assert!(!has_rule(&check_rule(&DynamicSendRule, src), "R052"));
     }
 
+    #[test]
+    fn no_violation_send_multiline_symbol() {
+        // obj.send(\n  :foo) should NOT be flagged — symbol arg, just wrapped
+        let src = "obj.send(\n  :foo)\n";
+        assert!(!has_rule(&check_rule(&DynamicSendRule, src), "R052"));
+    }
+
     // --- R053: shell injection ---
 
     #[test]
@@ -538,6 +628,23 @@ mod tests {
     #[test]
     fn no_violation_backtick_without_interpolation() {
         let src = "result = `ls -la`\n";
+        assert!(!has_rule(&check_rule(&ShellInjectionRule, src), "R053"));
+    }
+
+    #[test]
+    fn violation_system_no_paren_with_interpolation() {
+        let src = "system \"rm -rf #{path}\"\n";
+        assert!(
+            has_rule(&check_rule(&ShellInjectionRule, src), "R053"),
+            "{:?}",
+            check_rule(&ShellInjectionRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_system_array_form() {
+        // Array form: interpolation is in a non-first argument, so no shell expansion risk
+        let src = "system(\"rm\", \"-rf\", \"#{path}\")\n";
         assert!(!has_rule(&check_rule(&ShellInjectionRule, src), "R053"));
     }
 
