@@ -152,6 +152,56 @@ mod tests {
     }
 
     #[test]
+    fn nested_disable_blocks_independent() {
+        // Regression for issue #12: a second rlint:disable must not cancel the first.
+        // disable R001, then disable R002, then enable R002 → R001 still suppressed.
+        let long_line = "x".repeat(130);
+        let source = format!(
+            concat!(
+                "# frozen_string_literal: true\n",
+                "# rlint:disable R001\n",
+                "{line}\n", // line 3: R001 suppressed
+                "# rlint:disable R002\n",
+                "{line}   \n", // line 5: R001+R002 suppressed
+                "# rlint:enable R002\n",
+                "{line}   \n", // line 7: R001 still suppressed, R002 fires
+            ),
+            line = long_line
+        );
+        let diags = Linter::new().lint_file("test.rb", &source);
+        let r001: Vec<_> = diags.iter().filter(|d| d.rule == "R001").collect();
+        let r002: Vec<_> = diags.iter().filter(|d| d.rule == "R002").collect();
+        assert_eq!(r001.len(), 0, "R001 should remain suppressed: {r001:?}");
+        assert_eq!(r002.len(), 1, "R002 should fire only on line 7: {r002:?}");
+        assert_eq!(r002[0].line, 7);
+    }
+
+    #[test]
+    fn nested_disable_blocks_global_enable() {
+        // Global enable closes all concurrent disable blocks.
+        let long_line = "x".repeat(130);
+        let source = format!(
+            concat!(
+                "# frozen_string_literal: true\n",
+                "# rlint:disable R001\n",
+                "{line}\n", // line 3: R001 suppressed
+                "# rlint:disable R002\n",
+                "{line}   \n", // line 5: R001+R002 suppressed
+                "# rlint:enable\n",
+                "{line}   \n", // line 7: both fire
+            ),
+            line = long_line
+        );
+        let diags = Linter::new().lint_file("test.rb", &source);
+        let r001: Vec<_> = diags.iter().filter(|d| d.rule == "R001").collect();
+        let r002: Vec<_> = diags.iter().filter(|d| d.rule == "R002").collect();
+        assert_eq!(r001.len(), 1, "R001 should fire on line 7: {r001:?}");
+        assert_eq!(r001[0].line, 7);
+        assert_eq!(r002.len(), 1, "R002 should fire on line 7: {r002:?}");
+        assert_eq!(r002[0].line, 7);
+    }
+
+    #[test]
     fn with_config_uses_custom_line_length() {
         let mut config = Config::default();
         config.line_length = 50;

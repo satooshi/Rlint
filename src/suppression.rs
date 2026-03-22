@@ -31,8 +31,10 @@ pub(crate) fn apply_suppressions(diags: &mut Vec<Diagnostic>, tokens: &[Token]) 
     }
 
     let mut suppressions: Vec<Suppression> = Vec::new();
-    // Active disable block: (rules, start_line)
-    let mut active: Option<(Option<Vec<String>>, usize)> = None;
+    // Active disable blocks: each entry is (rules, start_line).
+    // Multiple concurrent blocks are supported so that a second rlint:disable
+    // does not cancel an earlier one.
+    let mut active: Vec<(Option<Vec<String>>, usize)> = Vec::new();
 
     for token in tokens {
         if token.kind != TokenKind::Comment {
@@ -51,66 +53,67 @@ pub(crate) fn apply_suppressions(diags: &mut Vec<Diagnostic>, tokens: &[Token]) 
             });
         } else if let Some(rest) = text.strip_prefix("rlint:enable") {
             let enable_rules = parse_rule_list(rest.trim());
-            if let Some((active_rules, start)) = active.take() {
-                let end = token.line.saturating_sub(1);
-                match (enable_rules, active_rules) {
-                    // rlint:enable (no rules) → close the entire active block
-                    (None, ar) => {
-                        suppressions.push(Suppression {
-                            rules: ar,
-                            start,
-                            end,
-                        });
+            let end = token.line.saturating_sub(1);
+            match enable_rules {
+                // rlint:enable (no rules) → close ALL active blocks
+                None => {
+                    for (rules, start) in active.drain(..) {
+                        suppressions.push(Suppression { rules, start, end });
                     }
-                    // rlint:enable Rxx after rlint:disable (all rules): close the
-                    // entire block. The current rule structure cannot represent
-                    // "suppress all except Rxx", so a targeted enable after a global
-                    // disable re-enables all rules. Document this in user-facing help.
-                    (Some(_), None) => {
-                        suppressions.push(Suppression {
-                            rules: None,
-                            start,
-                            end,
-                        });
-                    }
-                    // rlint:enable R001 with rlint:disable R001,R002 → partial close
-                    (Some(en_rules), Some(ac_rules)) => {
-                        // Close the entire original block up to the enable line.
-                        suppressions.push(Suppression {
-                            rules: Some(ac_rules.clone()),
-                            start,
-                            end,
-                        });
-                        // Re-open only the rules that were NOT enabled.
-                        // Use the same prefix semantics as Suppression::suppresses():
-                        // an ac_rule is considered enabled if any en_rule is a prefix of it.
-                        let remaining: Vec<String> = ac_rules
-                            .iter()
-                            .filter(|r| !en_rules.iter().any(|en| r.starts_with(en.as_str())))
-                            .cloned()
-                            .collect();
-                        if !remaining.is_empty() {
-                            active = Some((Some(remaining), token.line + 1));
+                }
+                // rlint:enable Rxx → scan every active block and close/partial-close it
+                Some(en_rules) => {
+                    let mut new_active: Vec<(Option<Vec<String>>, usize)> = Vec::new();
+                    for (ac_rules, start) in active.drain(..) {
+                        match ac_rules {
+                            // rlint:enable Rxx after rlint:disable (all rules): close the
+                            // entire block. The current rule structure cannot represent
+                            // "suppress all except Rxx", so a targeted enable after a global
+                            // disable re-enables all rules. Document this in user-facing help.
+                            None => {
+                                suppressions.push(Suppression {
+                                    rules: None,
+                                    start,
+                                    end,
+                                });
+                            }
+                            // rlint:enable R001 with rlint:disable R001,R002 → partial close
+                            Some(ac_list) => {
+                                // Close the entire original block up to the enable line.
+                                suppressions.push(Suppression {
+                                    rules: Some(ac_list.clone()),
+                                    start,
+                                    end,
+                                });
+                                // Re-open only the rules that were NOT enabled.
+                                // Use the same prefix semantics as Suppression::suppresses():
+                                // an ac_rule is considered enabled if any en_rule is a prefix of it.
+                                let remaining: Vec<String> = ac_list
+                                    .iter()
+                                    .filter(|r| {
+                                        !en_rules.iter().any(|en| r.starts_with(en.as_str()))
+                                    })
+                                    .cloned()
+                                    .collect();
+                                if !remaining.is_empty() {
+                                    new_active.push((Some(remaining), token.line + 1));
+                                }
+                            }
                         }
                     }
+                    active = new_active;
                 }
             }
         } else if let Some(rest) = text.strip_prefix("rlint:disable") {
-            // Close any previously open block before starting a new one
-            if let Some((rules, start)) = active.take() {
-                suppressions.push(Suppression {
-                    rules,
-                    start,
-                    end: token.line.saturating_sub(1),
-                });
-            }
+            // Push a new block without closing existing ones so that concurrent
+            // disable blocks can coexist independently.
             let rules = parse_rule_list(rest.trim());
-            active = Some((rules, token.line));
+            active.push((rules, token.line));
         }
     }
 
-    // Close any still-open suppression at end of file
-    if let Some((rules, start)) = active {
+    // Close any still-open suppressions at end of file
+    for (rules, start) in active.drain(..) {
         suppressions.push(Suppression {
             rules,
             start,
