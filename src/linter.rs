@@ -177,6 +177,33 @@ mod tests {
     }
 
     #[test]
+    fn targeted_enable_with_global_block_closes_all() {
+        // When a targeted enable encounters a global-disable block, ALL active blocks
+        // are closed (cannot represent "suppress all except Rxx").
+        // disable R001 (specific) + disable (global) + enable R002 → everything re-enabled.
+        let long_line = "x".repeat(130);
+        let source = format!(
+            concat!(
+                "# frozen_string_literal: true\n",
+                "# rlint:disable R001\n",
+                "{line}\n", // line 3: R001 suppressed
+                "# rlint:disable\n",
+                "{line}   \n", // line 5: all suppressed
+                "# rlint:enable R002\n",
+                "{line}   \n", // line 7: global block triggered close-all → R001 fires too
+            ),
+            line = long_line
+        );
+        let diags = Linter::new().lint_file("test.rb", &source);
+        let r001: Vec<_> = diags.iter().filter(|d| d.rule == "R001").collect();
+        let r002: Vec<_> = diags.iter().filter(|d| d.rule == "R002").collect();
+        assert_eq!(r001.len(), 1, "R001 should fire on line 7: {r001:?}");
+        assert_eq!(r001[0].line, 7);
+        assert_eq!(r002.len(), 1, "R002 should fire on line 7: {r002:?}");
+        assert_eq!(r002[0].line, 7);
+    }
+
+    #[test]
     fn nested_disable_blocks_global_enable() {
         // Global enable closes all concurrent disable blocks.
         let long_line = "x".repeat(130);

@@ -63,45 +63,39 @@ pub(crate) fn apply_suppressions(diags: &mut Vec<Diagnostic>, tokens: &[Token]) 
                 }
                 // rlint:enable Rxx → scan every active block and close/partial-close it
                 Some(en_rules) => {
-                    let mut new_active: Vec<(Option<Vec<String>>, usize)> = Vec::new();
-                    for (ac_rules, start) in active.drain(..) {
-                        match ac_rules {
-                            // rlint:enable Rxx after rlint:disable (all rules): close the
-                            // entire block. The current rule structure cannot represent
-                            // "suppress all except Rxx", so a targeted enable after a global
-                            // disable re-enables all rules. Document this in user-facing help.
-                            None => {
-                                suppressions.push(Suppression {
-                                    rules: None,
-                                    start,
-                                    end,
-                                });
-                            }
-                            // rlint:enable R001 with rlint:disable R001,R002 → partial close
-                            Some(ac_list) => {
-                                // Close the entire original block up to the enable line.
-                                suppressions.push(Suppression {
-                                    rules: Some(ac_list.clone()),
-                                    start,
-                                    end,
-                                });
-                                // Re-open only the rules that were NOT enabled.
-                                // Use the same prefix semantics as Suppression::suppresses():
-                                // an ac_rule is considered enabled if any en_rule is a prefix of it.
-                                let remaining: Vec<String> = ac_list
-                                    .iter()
-                                    .filter(|r| {
-                                        !en_rules.iter().any(|en| r.starts_with(en.as_str()))
-                                    })
-                                    .cloned()
-                                    .collect();
-                                if !remaining.is_empty() {
-                                    new_active.push((Some(remaining), token.line + 1));
-                                }
+                    // If any active block is a global disable (None rules), close ALL blocks.
+                    // A targeted enable cannot represent "suppress all except Rxx", so once a
+                    // global disable is in scope the entire set is re-enabled together.
+                    let has_global = active.iter().any(|(r, _)| r.is_none());
+                    if has_global {
+                        for (rules, start) in active.drain(..) {
+                            suppressions.push(Suppression { rules, start, end });
+                        }
+                    } else {
+                        let mut new_active: Vec<(Option<Vec<String>>, usize)> = Vec::new();
+                        for (ac_rules, start) in active.drain(..) {
+                            // SAFETY: has_global is false, so every entry has Some rules.
+                            let ac_list = ac_rules.expect("no global block");
+                            // Close the entire original block up to the enable line.
+                            suppressions.push(Suppression {
+                                rules: Some(ac_list.clone()),
+                                start,
+                                end,
+                            });
+                            // Re-open only the rules that were NOT enabled.
+                            // Use the same prefix semantics as Suppression::suppresses():
+                            // an ac_rule is considered enabled if any en_rule is a prefix of it.
+                            let remaining: Vec<String> = ac_list
+                                .iter()
+                                .filter(|r| !en_rules.iter().any(|en| r.starts_with(en.as_str())))
+                                .cloned()
+                                .collect();
+                            if !remaining.is_empty() {
+                                new_active.push((Some(remaining), token.line + 1));
                             }
                         }
+                        active = new_active;
                     }
-                    active = new_active;
                 }
             }
         } else if let Some(rest) = text.strip_prefix("rlint:disable") {
