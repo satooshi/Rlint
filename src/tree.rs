@@ -205,6 +205,13 @@ impl TreeBuilder {
     ) -> Node {
         let start_line = tokens[*idx].line;
         *idx += 1;
+
+        // For while/for/until, a `do` keyword on the same line is just a
+        // separator — skip it so it doesn't open a spurious Block node.
+        if matches!(kind, NodeKind::While | NodeKind::Until | NodeKind::For) {
+            Self::skip_separator_do(tokens, idx, start_line);
+        }
+
         let mut children = Vec::new();
         let end_line = Self::consume_until_end(tokens, idx, &mut children, stmt_starts);
 
@@ -217,26 +224,87 @@ impl TreeBuilder {
         }
     }
 
+    /// If the next non-whitespace/comment token on `kw_line` is `do`, skip it.
+    /// This handles the optional `do` separator in `while cond do`, `for x in
+    /// xs do`, and `until cond do`.
+    fn skip_separator_do(tokens: &[Token], idx: &mut usize, kw_line: usize) {
+        let mut j = *idx;
+        while j < tokens.len() {
+            let t = &tokens[j];
+            if t.line != kw_line {
+                break;
+            }
+            match t.kind {
+                TokenKind::Whitespace | TokenKind::Comment => {
+                    j += 1;
+                }
+                TokenKind::Do => {
+                    // Found the separator `do` — advance past it.
+                    *idx = j + 1;
+                    return;
+                }
+                _ => {
+                    // Some other token on the same line — not a separator `do`.
+                    j += 1;
+                }
+            }
+        }
+    }
+
     /// Parse `if`/`unless`/`while`/`until`. Returns `None` for postfix forms.
     ///
-    /// Known limitation: expression forms such as `x = if cond ... end` are
-    /// valid Ruby where `if` is not at a statement start, but this lightweight
-    /// approach will skip them (the `if` is not at a line/semicolon start so
-    /// `stmt_starts[*idx]` is false and we return `None`).  This is acceptable
-    /// for the structural rules this AST is designed for.
+    /// Postfix forms (e.g. `x = 1 if cond`) appear mid-line and have no
+    /// matching `end`, so we return `None`.  Non-statement-start block forms
+    /// like `x = if cond ... end` *do* have a matching `end` — we must
+    /// consume it (via `consume_until_end`) to keep nesting correct, but we
+    /// still return `None` because these expression-position blocks are not
+    /// meaningful for the structural rules this AST is designed for.
+    ///
+    /// Heuristic: if the keyword is followed (on the same line, ignoring
+    /// whitespace/comments) by a newline/EOF/`;`, it is a block form and
+    /// needs its `end` consumed.  Otherwise it is postfix.
     fn parse_block_or_postfix(
         tokens: &[Token],
         idx: &mut usize,
         kind: NodeKind,
         stmt_starts: &[bool],
     ) -> Option<Node> {
-        if !stmt_starts[*idx] {
+        let is_stmt_start = stmt_starts[*idx];
+
+        if !is_stmt_start {
+            // Determine whether this keyword is a block form (expression-
+            // position, e.g. `x = if cond ... end`) or a true postfix
+            // modifier (e.g. `x = 1 if cond`).
+            //
+            // Heuristic: look at the token immediately before the keyword
+            // (skipping whitespace).  If it is an operator/assignment/open-
+            // bracket, the keyword is in expression position (block form).
+            // Otherwise it follows a value and is a postfix modifier.
+            let looks_like_block = Self::preceded_by_operator(tokens, *idx);
+
+            if looks_like_block {
+                // Consume the matching `end` so it doesn't break the
+                // enclosing nesting, but don't emit a Node.
+                let kw_line_for_do = tokens[*idx].line;
+                *idx += 1;
+                if matches!(kind, NodeKind::While | NodeKind::Until) {
+                    Self::skip_separator_do(tokens, idx, kw_line_for_do);
+                }
+                let mut children = Vec::new();
+                Self::consume_until_end(tokens, idx, &mut children, stmt_starts);
+                return None;
+            }
+
             *idx += 1;
             return None;
         }
 
         let start_line = tokens[*idx].line;
         *idx += 1;
+        // Skip separator `do` for while/until block forms.
+        if matches!(kind, NodeKind::While | NodeKind::Until) {
+            Self::skip_separator_do(tokens, idx, start_line);
+        }
         let mut children = Vec::new();
         let end_line = Self::consume_until_end(tokens, idx, &mut children, stmt_starts);
 
@@ -266,6 +334,46 @@ impl TreeBuilder {
         } else {
             tokens.last().map(|t| t.line).unwrap_or(1)
         }
+    }
+
+    /// Returns `true` if the token at `idx` is preceded (skipping whitespace)
+    /// by an operator, assignment, open bracket, or keyword that puts the
+    /// following expression in value position — indicating a block form
+    /// rather than a postfix modifier.
+    fn preceded_by_operator(tokens: &[Token], idx: usize) -> bool {
+        let mut j = idx;
+        while j > 0 {
+            j -= 1;
+            match tokens[j].kind {
+                TokenKind::Whitespace | TokenKind::Comment => continue,
+                // Operators / assignments that expect a value on the right
+                TokenKind::Eq
+                | TokenKind::PlusEq
+                | TokenKind::MinusEq
+                | TokenKind::StarEq
+                | TokenKind::SlashEq
+                | TokenKind::PercentEq
+                | TokenKind::AndEq
+                | TokenKind::OrEq
+                | TokenKind::FatArrow
+                | TokenKind::Arrow
+                | TokenKind::Comma
+                | TokenKind::Semicolon
+                | TokenKind::LParen
+                | TokenKind::LBracket
+                | TokenKind::LBrace
+                | TokenKind::Colon
+                | TokenKind::Return
+                | TokenKind::Yield
+                | TokenKind::And2
+                | TokenKind::Or2
+                | TokenKind::Bang
+                | TokenKind::Not => return true,
+                _ => return false,
+            }
+        }
+        // Beginning of file — treat as statement start (block form)
+        true
     }
 
     fn next_name(tokens: &[Token], from: usize) -> String {
@@ -413,5 +521,80 @@ mod tests {
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].kind, NodeKind::Method);
         assert_eq!(nodes[0].name.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn expression_if_inside_def_does_not_steal_end() {
+        // `x = if cond ... end` is a block-form `if` in expression position.
+        // Its `end` must not close the enclosing `def`.
+        let src = "def foo\n  x = if cond\n    y\n  end\nend\n";
+        let nodes = build(src);
+        assert_eq!(nodes.len(), 1, "should produce exactly one top-level node");
+        assert_eq!(nodes[0].kind, NodeKind::Method);
+        assert_eq!(nodes[0].end_line, 5, "def should close on line 5");
+    }
+
+    #[test]
+    fn while_with_do_separator() {
+        // `while cond do ... end` — the `do` is a separator, not a block opener.
+        let src = "while cond do\n  x\nend\n";
+        let nodes = build(src);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].kind, NodeKind::While);
+        assert_eq!(nodes[0].start_line, 1);
+        assert_eq!(nodes[0].end_line, 3);
+    }
+
+    #[test]
+    fn for_with_do_separator() {
+        // `for i in xs do ... end` — the `do` is a separator.
+        let src = "for i in xs do\n  x\nend\n";
+        let nodes = build(src);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].kind, NodeKind::For);
+        assert_eq!(nodes[0].start_line, 1);
+        assert_eq!(nodes[0].end_line, 3);
+    }
+
+    #[test]
+    fn until_with_do_separator() {
+        let src = "until done do\n  work\nend\n";
+        let nodes = build(src);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].kind, NodeKind::Until);
+        assert_eq!(nodes[0].start_line, 1);
+        assert_eq!(nodes[0].end_line, 3);
+    }
+
+    #[test]
+    fn while_do_inside_method() {
+        // The `do` separator inside while must not consume the method's `end`.
+        let src = "def foo\n  while cond do\n    x\n  end\nend\n";
+        let nodes = build(src);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].kind, NodeKind::Method);
+        assert_eq!(nodes[0].end_line, 5);
+        assert_eq!(nodes[0].children.len(), 1);
+        assert_eq!(nodes[0].children[0].kind, NodeKind::While);
+    }
+
+    #[test]
+    fn for_do_inside_method() {
+        let src = "def foo\n  for i in xs do\n    x\n  end\nend\n";
+        let nodes = build(src);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].kind, NodeKind::Method);
+        assert_eq!(nodes[0].end_line, 5);
+        assert_eq!(nodes[0].children.len(), 1);
+        assert_eq!(nodes[0].children[0].kind, NodeKind::For);
+    }
+
+    #[test]
+    fn semicolon_as_statement_boundary() {
+        // `foo; if cond ... end` — the `if` after `;` is a statement start.
+        let src = "foo; if cond\n  x\nend\n";
+        let nodes = build(src);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].kind, NodeKind::If);
     }
 }

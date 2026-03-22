@@ -7,10 +7,12 @@ mod style;
 mod syntax;
 mod trailing_whitespace;
 
+use std::cell::OnceCell;
+
 use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::lexer::Token;
-use crate::tree::Node;
+use crate::tree::{Node, TreeBuilder};
 
 pub use complexity::ComplexityRule;
 pub use frozen_string_literal::FrozenStringLiteralRule;
@@ -22,32 +24,33 @@ pub use trailing_whitespace::TrailingWhitespaceRule;
 
 /// Context passed to each rule.
 ///
-/// Marked `#[non_exhaustive]` so that adding fields in the future is not a
-/// breaking change for external rule implementations.
+/// Marked `#[non_exhaustive]` to prevent external code from constructing this
+/// struct via struct-literal syntax. This is a **breaking change** in this
+/// release — callers must use [`LintContext::new`] instead. The attribute also
+/// ensures that adding new fields in future releases is non-breaking.
 #[non_exhaustive]
 pub struct LintContext<'a> {
     pub file: &'a str,
     pub source: &'a str,
     pub lines: &'a [&'a str],
     pub tokens: &'a [Token],
-    pub nodes: &'a [Node],
+    nodes: OnceCell<Vec<Node>>,
 }
 
 impl<'a> LintContext<'a> {
-    pub fn new(
-        file: &'a str,
-        source: &'a str,
-        lines: &'a [&'a str],
-        tokens: &'a [Token],
-        nodes: &'a [Node],
-    ) -> Self {
+    pub fn new(file: &'a str, source: &'a str, lines: &'a [&'a str], tokens: &'a [Token]) -> Self {
         Self {
             file,
             source,
             lines,
             tokens,
-            nodes,
+            nodes: OnceCell::new(),
         }
+    }
+
+    /// Returns the AST nodes, building them lazily on first access.
+    pub fn nodes(&self) -> &[Node] {
+        self.nodes.get_or_init(|| TreeBuilder::build(self.tokens))
     }
 }
 
