@@ -346,12 +346,13 @@ fn main() {
         .as_deref()
         .and_then(rblint::linter::parse_rule_list);
 
-    // --ignore appends to config.ignore
-    if let Some(ign_str) = &cli.ignore {
-        if let Some(extra) = rblint::linter::parse_rule_list(ign_str) {
-            config.ignore.extend(extra);
-        }
-    }
+    // --ignore appends to config.ignore; also keep a copy for watch-mode reloads
+    let cli_ignore: Vec<String> = cli
+        .ignore
+        .as_deref()
+        .and_then(rblint::linter::parse_rule_list)
+        .unwrap_or_default();
+    config.ignore.extend(cli_ignore.clone());
 
     let mut effective_select = cli_select.clone().or_else(|| {
         if config.select.is_empty() {
@@ -411,6 +412,7 @@ fn main() {
             &config,
             &reporter,
             &cli_select,
+            &cli_ignore,
             &effective_select,
             &effective_ignore,
             cli.errors_only,
@@ -482,6 +484,7 @@ fn run_watch_mode(
     initial_config: &rblint::config::Config,
     reporter: &Reporter,
     cli_select: &Option<Vec<String>>,
+    cli_ignore: &[String],
     initial_effective_select: &Option<Vec<String>>,
     initial_effective_ignore: &Option<Vec<String>>,
     errors_only: bool,
@@ -575,30 +578,24 @@ fn run_watch_mode(
                         .unwrap_or(false)
                 });
 
-                // Determine which Ruby files were affected
-                let ruby_changed: Vec<String> = event
-                    .paths
-                    .iter()
-                    .filter_map(|p| {
-                        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-                        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                        if ext == "rb"
-                            || name == "Gemfile"
-                            || name == "Rakefile"
-                            || name.ends_with(".gemspec")
-                            || name == "Guardfile"
-                        {
-                            let raw = p.to_string_lossy();
-                            let s = normalize_path(&raw);
-                            if !is_excluded(s, &current_exclude_patterns) {
-                                return Some(s.to_string());
-                            }
-                        }
-                        None
-                    })
-                    .collect();
+                // Check whether any Ruby file was affected
+                let ruby_changed = event.paths.iter().any(|p| {
+                    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if ext == "rb"
+                        || name == "Gemfile"
+                        || name == "Rakefile"
+                        || name.ends_with(".gemspec")
+                        || name == "Guardfile"
+                    {
+                        let raw = p.to_string_lossy();
+                        let s = normalize_path(&raw);
+                        return !is_excluded(s, &current_exclude_patterns);
+                    }
+                    false
+                });
 
-                if !config_changed && ruby_changed.is_empty() {
+                if !config_changed && !ruby_changed {
                     continue;
                 }
 
@@ -615,6 +612,8 @@ fn run_watch_mode(
                     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
                     let mut new_config = rblint::config::Config::load(&cwd);
                     new_config.exclude.push(".rblint_cache".to_string());
+                    // Re-apply CLI --ignore rules on top of the reloaded config
+                    new_config.ignore.extend(cli_ignore.iter().cloned());
                     current_config_hash = hash_config(&new_config);
                     current_linter = Linter::with_config(&new_config);
                     current_effective_select = compute_effective_select(&new_config, cli_select);

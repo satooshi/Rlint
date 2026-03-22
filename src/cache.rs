@@ -147,6 +147,7 @@ fn version_hash() -> u64 {
 pub struct Cache {
     entries: HashMap<PathBuf, CacheEntry>,
     path: PathBuf,
+    dirty: bool,
 }
 
 impl Cache {
@@ -161,18 +162,32 @@ impl Cache {
             .ok()
             .filter(|m| m.len() <= Self::MAX_CACHE_SIZE)
             .and_then(|_| std::fs::read(cache_path).ok())
-            .and_then(|bytes| bincode::deserialize(&bytes).ok())
+            .and_then(|bytes| {
+                use bincode::Options;
+                bincode::DefaultOptions::new()
+                    .with_limit(Self::MAX_CACHE_SIZE)
+                    .deserialize(&bytes)
+                    .ok()
+            })
             .unwrap_or_default();
         Cache {
             entries,
             path: cache_path.to_path_buf(),
+            dirty: false,
         }
     }
 
     /// Serialise the cache to disk.  Errors are silently ignored so that a
     /// read-only filesystem does not break normal linting.
     pub fn save(&self) {
-        if let Ok(bytes) = bincode::serialize(&self.entries) {
+        if !self.dirty {
+            return;
+        }
+        use bincode::Options;
+        if let Ok(bytes) = bincode::DefaultOptions::new()
+            .with_limit(Self::MAX_CACHE_SIZE)
+            .serialize(&self.entries)
+        {
             let _ = std::fs::write(&self.path, bytes);
         }
     }
@@ -210,6 +225,7 @@ impl Cache {
         diagnostics: &[Diagnostic],
     ) {
         let cached = diagnostics.iter().map(diagnostic_to_cached).collect();
+        self.dirty = true;
         self.entries.insert(
             file,
             CacheEntry {
