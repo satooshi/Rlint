@@ -2,6 +2,7 @@
 name = "rblint"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.70.0"
 description = "A fast Ruby linter written in Rust"
 license = "MIT"
 
