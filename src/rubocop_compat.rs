@@ -48,8 +48,10 @@ struct CopConfig {
 /// Top-level `.rubocop.yml` structure.
 ///
 /// The file is a YAML mapping of cop names (strings) to their config blocks.
-/// Keys that are not cop names (e.g. `AllCops`, `inherit_from`) are silently
-/// ignored by using `serde(flatten)`.
+/// `serde(flatten)` captures **all** top-level keys into the `cops` map —
+/// including non-cop keys like `AllCops` and `inherit_from`.  These are
+/// handled explicitly in parsing/conversion; unrecognised keys simply do not
+/// match any entry in `cop_to_rule` and are therefore ignored.
 #[derive(Debug, Deserialize, Default)]
 pub struct RuboCopConfig {
     /// All cop sections, keyed by cop name.
@@ -83,8 +85,11 @@ fn load_rubocop_yml_raw(path: &Path) -> Option<RuboCopConfig> {
 }
 
 /// Load and parse a `.rubocop.yml` file from `path`, resolving `inherit_from`
-/// references.  Inherited files are merged first; the main file wins on
-/// conflicts.  Returns `None` on I/O or YAML parse errors.
+/// references.  Inherited files are merged in order (later files override
+/// earlier ones); the main file then wins on all conflicts.
+///
+/// Returns `None` only when the main file itself cannot be read or parsed.
+/// Errors in inherited files are silently skipped (best-effort merge).
 pub fn load_rubocop_yml(path: &Path) -> Option<RuboCopConfig> {
     let base_dir = path.parent().unwrap_or(Path::new("."));
 
@@ -120,7 +125,7 @@ pub fn load_rubocop_yml(path: &Path) -> Option<RuboCopConfig> {
     for inh_path in &inherited_paths {
         if let Some(inh_cfg) = load_rubocop_yml_raw(inh_path) {
             for (k, v) in inh_cfg.cops {
-                merged.cops.entry(k).or_insert(v);
+                merged.cops.insert(k, v);
             }
         }
     }
@@ -244,7 +249,28 @@ pub fn generate_rlint_toml(config: &Config) -> String {
         lines.push(format!("max-complexity = {}", config.max_complexity));
     }
 
-    let escape_toml_str = |s: &str| -> String { s.replace('\\', "\\\\").replace('"', "\\\"") };
+    let escape_toml_str = |s: &str| -> String {
+        let mut out = String::with_capacity(s.len());
+        for ch in s.chars() {
+            match ch {
+                '\\' => out.push_str("\\\\"),
+                '"' => out.push_str("\\\""),
+                '\n' => out.push_str("\\n"),
+                '\t' => out.push_str("\\t"),
+                '\r' => out.push_str("\\r"),
+                '\u{08}' => out.push_str("\\b"),
+                '\u{0C}' => out.push_str("\\f"),
+                c if c.is_control() => {
+                    // TOML uses \uXXXX for other control characters
+                    for unit in c.encode_utf16(&mut [0; 2]) {
+                        out.push_str(&format!("\\u{:04X}", unit));
+                    }
+                }
+                c => out.push(c),
+            }
+        }
+        out
+    };
     let fmt_list = |v: &[String]| -> String {
         v.iter()
             .map(|r| format!("\"{}\"", escape_toml_str(r)))
@@ -489,5 +515,150 @@ SomeGem/CustomCop:
 
         // Unknown cops should not appear in ignore
         assert_eq!(cfg.ignore.len(), 1, "only one rule should be ignored");
+    }
+
+    // --- AllCops: Exclude mapping ---
+
+    #[test]
+    fn allcops_exclude_maps_to_config_exclude() {
+        let yaml = r#"
+AllCops:
+  Exclude:
+    - "vendor/**/*"
+    - "db/schema.rb"
+    - "tmp/**/*"
+"#;
+        let cfg = parse_yaml_config(yaml);
+        assert_eq!(cfg.exclude.len(), 3);
+        assert!(cfg.exclude.contains(&"vendor/**/*".to_string()));
+        assert!(cfg.exclude.contains(&"db/schema.rb".to_string()));
+        assert!(cfg.exclude.contains(&"tmp/**/*".to_string()));
+    }
+
+    // --- inherit_from resolution ---
+
+    #[test]
+    fn inherit_from_resolves_single_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let parent_yaml = r#"
+Layout/LineLength:
+  Max: 80
+"#;
+        let main_yaml = r#"
+inherit_from: parent.yml
+
+Style/FrozenStringLiteralComment:
+  Enabled: false
+"#;
+        std::fs::write(dir.path().join("parent.yml"), parent_yaml).unwrap();
+        std::fs::write(dir.path().join(".rubocop.yml"), main_yaml).unwrap();
+
+        let cfg_raw = load_rubocop_yml(&dir.path().join(".rubocop.yml")).expect("should parse");
+        let cfg = convert_to_config(&cfg_raw);
+
+        // Inherited value
+        assert_eq!(cfg.line_length, 80);
+        // Main file value
+        assert!(cfg.ignore.contains(&"R003".to_string()));
+    }
+
+    #[test]
+    fn inherit_from_later_file_overrides_earlier() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("first.yml"),
+            "Layout/LineLength:\n  Max: 80\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("second.yml"),
+            "Layout/LineLength:\n  Max: 100\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join(".rubocop.yml"),
+            "inherit_from:\n  - first.yml\n  - second.yml\n",
+        )
+        .unwrap();
+
+        let cfg_raw = load_rubocop_yml(&dir.path().join(".rubocop.yml")).expect("should parse");
+        let cfg = convert_to_config(&cfg_raw);
+
+        // second.yml should override first.yml
+        assert_eq!(cfg.line_length, 100);
+    }
+
+    #[test]
+    fn inherit_from_main_overrides_inherited() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("parent.yml"),
+            "Layout/LineLength:\n  Max: 80\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join(".rubocop.yml"),
+            "inherit_from: parent.yml\nLayout/LineLength:\n  Max: 120\n",
+        )
+        .unwrap();
+
+        let cfg_raw = load_rubocop_yml(&dir.path().join(".rubocop.yml")).expect("should parse");
+        let cfg = convert_to_config(&cfg_raw);
+
+        // Main file wins
+        assert_eq!(cfg.line_length, 120);
+    }
+
+    #[test]
+    fn inherit_from_missing_file_is_skipped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join(".rubocop.yml"),
+            "inherit_from: nonexistent.yml\nLayout/LineLength:\n  Max: 90\n",
+        )
+        .unwrap();
+
+        let cfg_raw = load_rubocop_yml(&dir.path().join(".rubocop.yml")).expect("should parse");
+        let cfg = convert_to_config(&cfg_raw);
+
+        assert_eq!(cfg.line_length, 90);
+    }
+
+    // --- generate_rlint_toml: extend-select ---
+
+    #[test]
+    fn generate_toml_emits_extend_select() {
+        let mut cfg = Config::default();
+        cfg.extend_select = vec!["R003".to_string(), "R010".to_string()];
+        let toml = generate_rlint_toml(&cfg);
+        assert!(
+            toml.contains("extend-select"),
+            "expected extend-select in output, got: {toml}"
+        );
+        assert!(toml.contains("R003"), "got: {toml}");
+        assert!(toml.contains("R010"), "got: {toml}");
+    }
+
+    // --- TOML escaping ---
+
+    #[test]
+    fn toml_escaping_handles_special_chars() {
+        let mut cfg = Config::default();
+        cfg.ignore = vec!["has\"quote".to_string(), "has\\slash".to_string()];
+        cfg.exclude = vec!["has\nnewline".to_string(), "has\ttab".to_string()];
+        let toml = generate_rlint_toml(&cfg);
+        assert!(
+            toml.contains(r#"has\"quote"#),
+            "double quote should be escaped"
+        );
+        assert!(
+            toml.contains(r#"has\\slash"#),
+            "backslash should be escaped"
+        );
+        assert!(
+            toml.contains(r#"has\nnewline"#),
+            "newline should be escaped"
+        );
+        assert!(toml.contains(r#"has\ttab"#), "tab should be escaped");
     }
 }

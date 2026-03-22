@@ -209,23 +209,7 @@ fn main() {
     // Handle --migrate-config: find .rubocop.yml by walking up from CWD
     if cli.migrate_config {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let canonical_cwd = std::fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
-        let rubocop_path = {
-            let mut found: Option<std::path::PathBuf> = None;
-            let mut dir: &std::path::Path = &canonical_cwd;
-            loop {
-                let candidate = dir.join(".rubocop.yml");
-                if candidate.exists() {
-                    found = Some(candidate);
-                    break;
-                }
-                match dir.parent() {
-                    Some(p) => dir = p,
-                    None => break,
-                }
-            }
-            found
-        };
+        let rubocop_path = rblint::config::find_file_in_ancestors(&cwd, ".rubocop.yml");
         match rubocop_path {
             None => {
                 eprintln!(

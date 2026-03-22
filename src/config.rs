@@ -52,6 +52,24 @@ impl Default for Config {
     }
 }
 
+/// Walk up from `start_dir` looking for a file named `filename`.
+/// Returns the first matching path, or `None` if the filesystem root is
+/// reached without finding one.
+pub fn find_file_in_ancestors(start_dir: &Path, filename: &str) -> Option<std::path::PathBuf> {
+    let canonical = std::fs::canonicalize(start_dir).unwrap_or_else(|_| start_dir.to_path_buf());
+    let mut dir: &Path = &canonical;
+    loop {
+        let candidate = dir.join(filename);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        match dir.parent() {
+            Some(p) => dir = p,
+            None => return None,
+        }
+    }
+}
+
 impl Config {
     /// Walk up from `start_dir` looking for `.rlint.toml`.
     /// If no `.rlint.toml` is found anywhere in the hierarchy, falls back to
