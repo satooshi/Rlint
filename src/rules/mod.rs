@@ -24,8 +24,9 @@ pub use security::{
     UnsafeDeserializationRule,
 };
 pub use style::{
-    BlankLinesRule, FinalNewlineRule, MethodSpacingRule, OperatorSpacingRule, PNilRule,
-    SemicolonRule, TrailingCommaRule,
+    BlankLinesRule, DoubleNegationRule, EmptyMethodRule, FinalNewlineRule, MethodSpacingRule,
+    NegatedIfRule, OperatorSpacingRule, PNilRule, RedundantSelfRule, SemicolonRule,
+    TrailingCommaRule,
 };
 pub use syntax::SyntaxRule;
 pub use trailing_whitespace::TrailingWhitespaceRule;
@@ -84,6 +85,10 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn Rule + Send + Sync>> {
         Box::new(PNilRule),            // R024
         Box::new(FinalNewlineRule),    // R025
         Box::new(MethodSpacingRule),   // R026
+        Box::new(EmptyMethodRule),     // R027
+        Box::new(NegatedIfRule),       // R028
+        Box::new(DoubleNegationRule),  // R029
+        Box::new(RedundantSelfRule),   // R033
         Box::new(SyntaxRule),
         Box::new(EvalUsageRule),             // R050
         Box::new(HardcodedCredentialsRule),  // R051
@@ -94,6 +99,7 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn Rule + Send + Sync>> {
             max_method_lines: config.max_method_lines,
             max_class_lines: config.max_class_lines,
             max_complexity: config.max_complexity,
+            max_parameters: config.max_parameters,
         }),
     ]
 }
