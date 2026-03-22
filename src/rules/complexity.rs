@@ -17,6 +17,7 @@ pub struct ComplexityRule {
     pub(crate) max_method_lines: usize,
     pub(crate) max_class_lines: usize,
     pub(crate) max_complexity: usize,
+    pub(crate) max_parameters: usize,
 }
 
 impl Default for ComplexityRule {
@@ -26,6 +27,7 @@ impl Default for ComplexityRule {
             max_method_lines: config.max_method_lines,
             max_class_lines: config.max_class_lines,
             max_complexity: config.max_complexity,
+            max_parameters: config.max_parameters,
         }
     }
 }
@@ -193,6 +195,80 @@ impl Rule for ComplexityRule {
             i += 1;
         }
 
+        // R043: Too many method parameters
+        let mut i = 0;
+        while i < tokens.len() {
+            if tokens[i].kind == TokenKind::Def {
+                let def_line = tokens[i].line;
+                let def_col = tokens[i].col;
+                let name = next_name(tokens, i);
+
+                // Find opening paren of parameter list
+                let mut j = i + 1;
+                // Skip whitespace and name token
+                while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+                    j += 1;
+                }
+                // Skip the method name
+                if j < tokens.len() {
+                    j += 1;
+                }
+                // Skip whitespace between name and (
+                while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+                    j += 1;
+                }
+
+                if j < tokens.len() && tokens[j].kind == TokenKind::LParen {
+                    j += 1; // skip (
+                    let mut param_count = 0usize;
+                    let mut paren_depth = 1usize;
+                    let mut found_param = false;
+
+                    while j < tokens.len() && paren_depth > 0 {
+                        match tokens[j].kind {
+                            TokenKind::LParen => {
+                                paren_depth += 1;
+                                found_param = true;
+                            }
+                            TokenKind::RParen => {
+                                paren_depth -= 1;
+                                if paren_depth == 0 {
+                                    // Count last param if we saw any content
+                                    if found_param {
+                                        param_count += 1;
+                                    }
+                                }
+                            }
+                            TokenKind::Comma if paren_depth == 1 => {
+                                param_count += 1;
+                                found_param = false;
+                            }
+                            TokenKind::Whitespace | TokenKind::Newline => {}
+                            _ => {
+                                found_param = true;
+                            }
+                        }
+                        j += 1;
+                    }
+
+                    if param_count > self.max_parameters {
+                        diags.push(Diagnostic::new(
+                            ctx.file,
+                            def_line,
+                            def_col,
+                            "R043",
+                            format!(
+                                "Method `{}` has too many parameters ({}, max {})",
+                                name, param_count, self.max_parameters
+                            ),
+                            Severity::Warning,
+                        ));
+                    }
+                }
+            }
+            i += 1;
+        }
+
         diags
     }
 }
@@ -308,5 +384,43 @@ mod tests {
             .expect("R042 expected");
         assert!(r042.message.contains("foo"));
         assert!(r042.message.contains("11"));
+    }
+
+    // --- R043: too many parameters ---
+
+    #[test]
+    fn no_violation_few_params() {
+        let src = "def foo(a, b, c)\nend\n";
+        assert!(!has_rule(&check(src), "R043"));
+    }
+
+    #[test]
+    fn no_violation_exactly_5_params() {
+        let src = "def foo(a, b, c, d, e)\nend\n";
+        assert!(!has_rule(&check(src), "R043"));
+    }
+
+    #[test]
+    fn violation_6_params() {
+        let src = "def foo(a, b, c, d, e, f)\nend\n";
+        assert!(has_rule(&check(src), "R043"), "{:?}", check(src));
+    }
+
+    #[test]
+    fn violation_includes_method_name_and_count() {
+        let src = "def bar(a, b, c, d, e, f)\nend\n";
+        let diags = check(src);
+        let r043 = diags
+            .iter()
+            .find(|d| d.rule == "R043")
+            .expect("R043 expected");
+        assert!(r043.message.contains("bar"));
+        assert!(r043.message.contains('6'));
+    }
+
+    #[test]
+    fn no_violation_no_params() {
+        let src = "def foo\nend\n";
+        assert!(!has_rule(&check(src), "R043"));
     }
 }

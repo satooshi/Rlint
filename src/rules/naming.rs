@@ -20,6 +20,12 @@ fn is_screaming_snake_case(s: &str) -> bool {
         .all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
+/// Returns true if the name is proper CamelCase:
+/// starts with uppercase and contains no underscores.
+fn is_camel_case(s: &str) -> bool {
+    s.chars().next().is_some_and(|c| c.is_uppercase()) && !s.contains('_')
+}
+
 impl Rule for NamingRule {
     fn name(&self) -> &'static str {
         "R010"
@@ -32,6 +38,36 @@ impl Rule for NamingRule {
 
         while i < tokens.len() {
             let tok = &tokens[i];
+
+            // R013: Class/module name should be CamelCase
+            if tok.kind == TokenKind::Class || tok.kind == TokenKind::Module {
+                let mut j = i + 1;
+                while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+                    j += 1;
+                }
+                if let Some(name_tok) = tokens.get(j) {
+                    if matches!(name_tok.kind, TokenKind::Ident | TokenKind::Constant)
+                        && !is_camel_case(&name_tok.text)
+                    {
+                        diags.push(Diagnostic::new(
+                            ctx.file,
+                            name_tok.line,
+                            name_tok.col,
+                            "R013",
+                            format!(
+                                "{} name `{}` should be CamelCase",
+                                if tok.kind == TokenKind::Class {
+                                    "Class"
+                                } else {
+                                    "Module"
+                                },
+                                name_tok.text
+                            ),
+                            Severity::Warning,
+                        ));
+                    }
+                }
+            }
 
             // Method names should be snake_case: `def foo_bar`
             if tok.kind == TokenKind::Def {
