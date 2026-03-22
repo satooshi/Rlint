@@ -205,22 +205,37 @@ impl Rule for ComplexityRule {
 
                 // Find opening paren of parameter list
                 let mut j = i + 1;
-                // Skip whitespace and name token
+                // Skip whitespace
                 while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
                     j += 1;
                 }
-                // Skip the method name
+                // Skip the method name token (could be `self`, then `.`, then name)
                 if j < tokens.len() {
                     j += 1;
                 }
-                // Skip whitespace between name and (
+                // Handle singleton methods: `def self.foo` — skip `.` and next ident
+                while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+                    j += 1;
+                }
+                if j < tokens.len() && tokens[j].kind == TokenKind::Dot {
+                    j += 1; // skip dot
+                    while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+                        j += 1;
+                    }
+                    // skip actual method name
+                    if j < tokens.len() {
+                        j += 1;
+                    }
+                }
+                // Skip whitespace between name and ( or first param
                 while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
                     j += 1;
                 }
 
-                if j < tokens.len() && tokens[j].kind == TokenKind::LParen {
+                let param_count = if j < tokens.len() && tokens[j].kind == TokenKind::LParen {
+                    // Paren form: count commas at depth 1
                     j += 1; // skip (
-                    let mut param_count = 0usize;
+                    let mut count = 0usize;
                     let mut paren_depth = 1usize;
                     let mut found_param = false;
 
@@ -232,15 +247,12 @@ impl Rule for ComplexityRule {
                             }
                             TokenKind::RParen => {
                                 paren_depth -= 1;
-                                if paren_depth == 0 {
-                                    // Count last param if we saw any content
-                                    if found_param {
-                                        param_count += 1;
-                                    }
+                                if paren_depth == 0 && found_param {
+                                    count += 1;
                                 }
                             }
                             TokenKind::Comma if paren_depth == 1 => {
-                                param_count += 1;
+                                count += 1;
                                 found_param = false;
                             }
                             TokenKind::Whitespace | TokenKind::Newline => {}
@@ -250,20 +262,38 @@ impl Rule for ComplexityRule {
                         }
                         j += 1;
                     }
-
-                    if param_count > self.max_parameters {
-                        diags.push(Diagnostic::new(
-                            ctx.file,
-                            def_line,
-                            def_col,
-                            "R043",
-                            format!(
-                                "Method `{}` has too many parameters ({}, max {})",
-                                name, param_count, self.max_parameters
-                            ),
-                            Severity::Warning,
-                        ));
+                    count
+                } else if j < tokens.len()
+                    && !matches!(
+                        tokens[j].kind,
+                        TokenKind::Newline | TokenKind::End | TokenKind::Semicolon
+                    )
+                {
+                    // Paren-less form: count commas on the rest of the line + 1
+                    let mut count = 1usize; // at least one param if we reach here
+                    while j < tokens.len() && tokens[j].kind != TokenKind::Newline {
+                        if tokens[j].kind == TokenKind::Comma {
+                            count += 1;
+                        }
+                        j += 1;
                     }
+                    count
+                } else {
+                    0
+                };
+
+                if param_count > self.max_parameters {
+                    diags.push(Diagnostic::new(
+                        ctx.file,
+                        def_line,
+                        def_col,
+                        "R043",
+                        format!(
+                            "Method `{}` has too many parameters ({}, max {})",
+                            name, param_count, self.max_parameters
+                        ),
+                        Severity::Warning,
+                    ));
                 }
             }
             i += 1;
@@ -421,6 +451,30 @@ mod tests {
     #[test]
     fn no_violation_no_params() {
         let src = "def foo\nend\n";
+        assert!(!has_rule(&check(src), "R043"));
+    }
+
+    #[test]
+    fn violation_singleton_method_too_many_params() {
+        let src = "def self.foo(a, b, c, d, e, f)\nend\n";
+        assert!(has_rule(&check(src), "R043"), "{:?}", check(src));
+    }
+
+    #[test]
+    fn no_violation_singleton_method_few_params() {
+        let src = "def self.foo(a, b)\nend\n";
+        assert!(!has_rule(&check(src), "R043"));
+    }
+
+    #[test]
+    fn violation_paren_less_too_many_params() {
+        let src = "def foo a, b, c, d, e, f\nend\n";
+        assert!(has_rule(&check(src), "R043"), "{:?}", check(src));
+    }
+
+    #[test]
+    fn no_violation_paren_less_few_params() {
+        let src = "def foo a, b\nend\n";
         assert!(!has_rule(&check(src), "R043"));
     }
 }

@@ -87,7 +87,8 @@ impl Rule for EmptyMethodRule {
                         let trimmed = def_line_text.trim_start();
                         &def_line_text[..def_line_text.len() - trimmed.len()]
                     };
-                    let fix_line = format!("{}def {}; end", indent, name_text);
+                    let def_header = def_line_text.trim();
+                    let fix_line = format!("{}{}; end", indent, def_header);
 
                     diags.push(
                         Diagnostic::new(
@@ -95,7 +96,7 @@ impl Rule for EmptyMethodRule {
                             def_line,
                             def_col,
                             "R027",
-                            format!("Empty method body for `{name_text}` — use one-liner `def {name_text}; end`"),
+                            format!("Empty method body for `{name_text}` — use one-liner `{def_header}; end`"),
                             Severity::Info,
                         )
                         .with_fix(fix_line),
@@ -180,5 +181,15 @@ mod tests {
         assert!(r027.is_some(), "Expected fixable R027 diagnostic");
         let fix = r027.unwrap().fix.as_deref().unwrap_or("");
         assert!(fix.contains("def foo; end"), "fix: {fix}");
+    }
+
+    #[test]
+    fn fix_preserves_parameters() {
+        let src = "def foo(a, b)\nend\n";
+        let diags = check(src);
+        let r027 = diags.iter().find(|d| d.rule == "R027" && d.fix.is_some());
+        assert!(r027.is_some(), "Expected fixable R027 diagnostic");
+        let fix = r027.unwrap().fix.as_deref().unwrap_or("");
+        assert!(fix.contains("def foo(a, b); end"), "fix: {fix}");
     }
 }

@@ -41,14 +41,24 @@ impl Rule for NamingRule {
 
             // R013: Class/module name should be CamelCase
             if tok.kind == TokenKind::Class || tok.kind == TokenKind::Module {
+                let kind_label = if tok.kind == TokenKind::Class {
+                    "Class"
+                } else {
+                    "Module"
+                };
                 let mut j = i + 1;
                 while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
                     j += 1;
                 }
-                if let Some(name_tok) = tokens.get(j) {
-                    if matches!(name_tok.kind, TokenKind::Ident | TokenKind::Constant)
-                        && !is_camel_case(&name_tok.text)
-                    {
+                // Walk through all name segments separated by ::
+                loop {
+                    let Some(name_tok) = tokens.get(j) else {
+                        break;
+                    };
+                    if !matches!(name_tok.kind, TokenKind::Ident | TokenKind::Constant) {
+                        break;
+                    }
+                    if !is_camel_case(&name_tok.text) {
                         diags.push(Diagnostic::new(
                             ctx.file,
                             name_tok.line,
@@ -56,16 +66,28 @@ impl Rule for NamingRule {
                             "R013",
                             format!(
                                 "{} name `{}` should be CamelCase",
-                                if tok.kind == TokenKind::Class {
-                                    "Class"
-                                } else {
-                                    "Module"
-                                },
-                                name_tok.text
+                                kind_label, name_tok.text
                             ),
                             Severity::Warning,
                         ));
                     }
+                    j += 1;
+                    // Skip whitespace
+                    while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+                        j += 1;
+                    }
+                    // Continue through :: separators
+                    if tokens
+                        .get(j)
+                        .is_some_and(|t| t.kind == TokenKind::ColonColon)
+                    {
+                        j += 1;
+                        while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+                            j += 1;
+                        }
+                        continue;
+                    }
+                    break;
                 }
             }
 
@@ -244,5 +266,31 @@ mod tests {
             .find(|d| d.rule == "R012")
             .expect("R012 expected");
         assert!(r012.message.contains("fooBar"));
+    }
+
+    // --- R013: class/module CamelCase (qualified names) ---
+
+    #[test]
+    fn no_violation_qualified_camel_case() {
+        let diags = check("module Foo::Bar\nend");
+        assert!(!rules_in(&diags).contains(&"R013"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_qualified_second_segment_not_camel_case() {
+        let diags = check("module Foo::bar_baz\nend");
+        assert!(rules_in(&diags).contains(&"R013"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_qualified_first_segment_not_camel_case() {
+        let diags = check("class foo_bar::Baz\nend");
+        assert!(rules_in(&diags).contains(&"R013"), "{diags:?}");
+    }
+
+    #[test]
+    fn no_violation_deeply_qualified_camel_case() {
+        let diags = check("module Foo::Bar::Baz\nend");
+        assert!(!rules_in(&diags).contains(&"R013"), "{diags:?}");
     }
 }

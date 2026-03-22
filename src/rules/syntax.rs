@@ -207,6 +207,32 @@ impl Rule for SyntaxRule {
 
                 let term_line = tokens[i].line;
 
+                // Check if there's an inline condition (modifier form) on the same line.
+                // `return if ready?` or `raise unless valid` are NOT unconditional terminators.
+                let mut has_inline_condition = false;
+                let mut j = i + 1;
+                while j < tokens.len() && tokens[j].kind != TokenKind::Newline {
+                    if matches!(
+                        tokens[j].kind,
+                        TokenKind::If
+                            | TokenKind::Unless
+                            | TokenKind::While
+                            | TokenKind::Until
+                            | TokenKind::And
+                            | TokenKind::Or
+                            | TokenKind::And2
+                            | TokenKind::Or2
+                    ) {
+                        has_inline_condition = true;
+                        break;
+                    }
+                    j += 1;
+                }
+                if has_inline_condition {
+                    i += 1;
+                    continue;
+                }
+
                 // Skip to end of current line
                 let mut j = i + 1;
                 while j < tokens.len() && tokens[j].kind != TokenKind::Newline {
@@ -419,5 +445,36 @@ mod tests {
     fn no_violation_implicit_return() {
         let src = "def foo\n  42\nend";
         assert!(!has_rule(&check(src), "R032"));
+    }
+
+    // --- R035: unreachable code ---
+
+    #[test]
+    fn no_violation_return_if_modifier() {
+        // `return if condition` is a modifier form — code after it is NOT unreachable
+        let src = "def foo\n  return if done?\n  do_work\nend";
+        let diags = check(src);
+        assert!(!has_rule(&diags, "R035"), "{diags:?}");
+    }
+
+    #[test]
+    fn no_violation_raise_unless_modifier() {
+        let src = "def foo\n  raise unless valid?\n  do_work\nend";
+        let diags = check(src);
+        assert!(!has_rule(&diags, "R035"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_unconditional_return() {
+        let src = "def foo\n  return 42\n  do_work\nend";
+        let diags = check(src);
+        assert!(has_rule(&diags, "R035"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_unconditional_raise() {
+        let src = "def foo\n  raise \"err\"\n  do_work\nend";
+        let diags = check(src);
+        assert!(has_rule(&diags, "R035"), "{diags:?}");
     }
 }
