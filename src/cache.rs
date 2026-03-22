@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -147,7 +148,7 @@ fn version_hash() -> u64 {
 pub struct Cache {
     entries: HashMap<PathBuf, CacheEntry>,
     path: PathBuf,
-    dirty: bool,
+    dirty: AtomicBool,
 }
 
 impl Cache {
@@ -173,14 +174,14 @@ impl Cache {
         Cache {
             entries,
             path: cache_path.to_path_buf(),
-            dirty: false,
+            dirty: AtomicBool::new(false),
         }
     }
 
     /// Serialise the cache to disk.  Errors are silently ignored so that a
     /// read-only filesystem does not break normal linting.
     pub fn save(&self) {
-        if !self.dirty {
+        if !self.dirty.load(Ordering::Relaxed) {
             return;
         }
         use bincode::Options;
@@ -188,7 +189,9 @@ impl Cache {
             .with_limit(Self::MAX_CACHE_SIZE)
             .serialize(&self.entries)
         {
-            let _ = std::fs::write(&self.path, bytes);
+            if std::fs::write(&self.path, bytes).is_ok() {
+                self.dirty.store(false, Ordering::Relaxed);
+            }
         }
     }
 
@@ -225,7 +228,7 @@ impl Cache {
         diagnostics: &[Diagnostic],
     ) {
         let cached = diagnostics.iter().map(diagnostic_to_cached).collect();
-        self.dirty = true;
+        self.dirty.store(true, Ordering::Relaxed);
         self.entries.insert(
             file,
             CacheEntry {
