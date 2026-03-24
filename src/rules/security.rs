@@ -70,18 +70,28 @@ const CRED_PATTERNS: &[&str] = &[
 
 fn looks_like_credential_name(name: &str) -> bool {
     let lower = name.to_lowercase();
+    let orig = name.as_bytes();
+    let lower_bytes = lower.as_bytes();
     CRED_PATTERNS.iter().any(|p| {
-        // Require word-boundary match: pattern must be preceded by start-of-string or `_`,
-        // and followed by end-of-string or `_`. This prevents false positives such as
-        // `tokenizer` matching `token` or `secretary` matching `secret`.
-        let bytes = lower.as_bytes();
-        let pat = p.as_bytes();
+        // Require word-boundary match. A boundary is one of:
+        //   • start / end of string
+        //   • underscore separator (snake_case)
+        //   • camelCase transition: preceding char is lowercase and the first char of the
+        //     match is uppercase in the original string (e.g. auth**T**oken)
+        //   • camelCase end: the character after the match is uppercase in the original
+        //     string (e.g. **token**Secret)
+        // This prevents false positives like `tokenizer` or `secretary` while still
+        // catching camelCase names like `authToken` and `accessToken`.
         let mut start = 0;
         while let Some(pos) = lower[start..].find(p) {
             let abs = start + pos;
-            let end = abs + pat.len();
-            let before_ok = abs == 0 || bytes[abs - 1] == b'_';
-            let after_ok = end == bytes.len() || bytes[end] == b'_';
+            let end = abs + p.len();
+            let before_ok = abs == 0
+                || lower_bytes[abs - 1] == b'_'
+                || (orig[abs - 1].is_ascii_lowercase() && orig[abs].is_ascii_uppercase());
+            let after_ok = end == lower_bytes.len()
+                || lower_bytes[end] == b'_'
+                || orig[end].is_ascii_uppercase();
             if before_ok && after_ok {
                 return true;
             }
@@ -603,6 +613,35 @@ mod tests {
         // "access_token" should still match because "token" is a full word segment
         let src = "access_token = \"sk-abc123\"\n";
         assert!(has_rule(
+            &check_rule(&HardcodedCredentialsRule, src),
+            "R051"
+        ));
+    }
+
+    #[test]
+    fn violation_camel_case_auth_token() {
+        let src = "authToken = \"tok-abc123\"\n";
+        assert!(
+            has_rule(&check_rule(&HardcodedCredentialsRule, src), "R051"),
+            "{:?}",
+            check_rule(&HardcodedCredentialsRule, src)
+        );
+    }
+
+    #[test]
+    fn violation_camel_case_access_token() {
+        let src = "accessToken = \"tok-abc123\"\n";
+        assert!(
+            has_rule(&check_rule(&HardcodedCredentialsRule, src), "R051"),
+            "{:?}",
+            check_rule(&HardcodedCredentialsRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_tokenizer_still_not_credential() {
+        let src = "tokenizer = \"abc123\"\n";
+        assert!(!has_rule(
             &check_rule(&HardcodedCredentialsRule, src),
             "R051"
         ));
