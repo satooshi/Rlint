@@ -209,6 +209,19 @@ impl Rule for DynamicSendRule {
                 continue;
             }
 
+            // Skip method definitions (`def send`) and alias statements.
+            let prev_meaningful = (0..i)
+                .rev()
+                .find(|&k| !matches!(tokens[k].kind, TokenKind::Whitespace | TokenKind::Newline))
+                .map(|k| &tokens[k]);
+            let is_definition = matches!(prev_meaningful.map(|t| &t.kind), Some(TokenKind::Def))
+                || prev_meaningful
+                    .map(|t| t.kind == TokenKind::Ident && t.text == "alias")
+                    .unwrap_or(false);
+            if is_definition {
+                continue;
+            }
+
             // Look at the first argument (with or without a receiver dot)
             let mut j = i + 1;
             while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
@@ -303,7 +316,7 @@ impl Rule for ShellInjectionRule {
                 && SHELL_METHODS.contains(&tokens[i].text.as_str())
             {
                 let name = tokens[i].text.as_str();
-                if first_arg_has_interpolation(tokens, i + 1) {
+                if first_arg_has_interpolation(tokens, i + 1, false) {
                     diags.push(Diagnostic::new(
                         ctx.file,
                         tokens[i].line,
@@ -349,7 +362,7 @@ impl Rule for ShellInjectionRule {
             }
 
             let method_name = format!("{}.{}", tokens[i].text, tokens[j].text);
-            if first_arg_has_interpolation(tokens, j + 1) {
+            if first_arg_has_interpolation(tokens, j + 1, true) {
                 diags.push(Diagnostic::new(
                     ctx.file,
                     tokens[i].line,
@@ -376,7 +389,11 @@ impl Rule for ShellInjectionRule {
 ///   `system({"LANG" => "en"}, "cmd #{x}")` — hash literal first arg is env vars
 ///   `Open3.capture3(env, "cmd #{x}")`      — ident first arg may be env hash var
 /// In both cases the second argument is the actual shell command.
-fn first_arg_has_interpolation(tokens: &[crate::lexer::Token], start: usize) -> bool {
+fn first_arg_has_interpolation(
+    tokens: &[crate::lexer::Token],
+    start: usize,
+    allow_ident_env_skip: bool,
+) -> bool {
     let mut j = start;
     while j < tokens.len() && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline) {
         j += 1;
@@ -429,8 +446,11 @@ fn first_arg_has_interpolation(tokens: &[crate::lexer::Token], start: usize) -> 
             }
         }
         // Identifier or constant — may be an env hash variable (common with Open3).
-        // Only skip if a comma follows immediately; otherwise fall through.
-        TokenKind::Ident | TokenKind::Constant => {
+        // Only skip if a comma follows immediately AND the caller has indicated that an
+        // identifier env-hash prefix is plausible (i.e. Open3 / IO.popen calls).
+        // For standalone system/exec/spawn, any extra argument already makes the call
+        // argv-form (no shell expansion), so skipping here would produce false positives.
+        TokenKind::Ident | TokenKind::Constant if allow_ident_env_skip => {
             let mut peek = j + 1;
             while peek < tokens.len()
                 && matches!(
@@ -1020,6 +1040,27 @@ mod tests {
         );
     }
 
+    // Bug: method definitions named `send` / `public_send` must not be flagged
+    #[test]
+    fn no_violation_send_def() {
+        let src = "def send(method_name)\n  # impl\nend\n";
+        assert!(
+            !has_rule(&check_rule(&DynamicSendRule, src), "R052"),
+            "{:?}",
+            check_rule(&DynamicSendRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_public_send_def() {
+        let src = "def public_send(method_name)\n  # impl\nend\n";
+        assert!(
+            !has_rule(&check_rule(&DynamicSendRule, src), "R052"),
+            "{:?}",
+            check_rule(&DynamicSendRule, src)
+        );
+    }
+
     // --- R053: shell injection ---
 
     #[test]
@@ -1123,6 +1164,28 @@ mod tests {
         let src = "cmd = %x(\n  git show #{ref}\n)\n";
         assert!(
             has_rule(&check_rule(&ShellInjectionRule, src), "R053"),
+            "{:?}",
+            check_rule(&ShellInjectionRule, src)
+        );
+    }
+
+    // Bug: system/exec/spawn with a variable as first arg and interpolated string as
+    // second arg is argv form — no shell expansion occurs, must NOT be flagged.
+    #[test]
+    fn no_violation_system_argv_form_var_command() {
+        let src = "system(cmd, \"show #{ref}\")\n";
+        assert!(
+            !has_rule(&check_rule(&ShellInjectionRule, src), "R053"),
+            "{:?}",
+            check_rule(&ShellInjectionRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_exec_argv_form_var_command() {
+        let src = "exec(cmd, \"--flag=#{val}\")\n";
+        assert!(
+            !has_rule(&check_rule(&ShellInjectionRule, src), "R053"),
             "{:?}",
             check_rule(&ShellInjectionRule, src)
         );
