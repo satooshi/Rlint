@@ -25,6 +25,19 @@ impl Rule for EvalUsageRule {
             if !EVAL_NAMES.contains(&name) {
                 continue;
             }
+            // Skip method definitions (`def eval`) and alias statements (`alias eval …`).
+            let prev_meaningful = (0..i)
+                .rev()
+                .find(|&k| !matches!(tokens[k].kind, TokenKind::Whitespace | TokenKind::Newline))
+                .map(|k| &tokens[k]);
+            let is_definition = matches!(prev_meaningful.map(|t| &t.kind), Some(TokenKind::Def))
+                || prev_meaningful
+                    .map(|t| t.kind == TokenKind::Ident && t.text == "alias")
+                    .unwrap_or(false);
+            if is_definition {
+                continue;
+            }
+
             // Must be followed by `(`, a string literal, or an identifier (bare call)
             let j = i + 1;
             let next_meaningful = (j..tokens.len())
@@ -214,8 +227,9 @@ impl Rule for DynamicSendRule {
                 {
                     j += 1;
                 }
-                // If the first argument is NOT a symbol (`:name`), it's dynamic
-                let is_static = j < tokens.len() && tokens[j].kind == TokenKind::Symbol;
+                // Symbol (`:name`) and string literals (`"name"`) are static — not dynamic
+                let is_static = j < tokens.len()
+                    && matches!(tokens[j].kind, TokenKind::Symbol | TokenKind::StringLiteral);
                 if !is_static && j < tokens.len() && tokens[j].kind != TokenKind::RParen {
                     diags.push(Diagnostic::new(
                         ctx.file,
@@ -228,7 +242,8 @@ impl Rule for DynamicSendRule {
                 }
             } else if tokens[j].kind != TokenKind::Newline && tokens[j].kind != TokenKind::Dot {
                 // no-paren form: send expr or obj.send expr
-                let is_static = tokens[j].kind == TokenKind::Symbol;
+                let is_static =
+                    matches!(tokens[j].kind, TokenKind::Symbol | TokenKind::StringLiteral);
                 if !is_static {
                     diags.push(Diagnostic::new(
                         ctx.file,
@@ -259,45 +274,23 @@ impl Rule for ShellInjectionRule {
         let mut diags = Vec::new();
         let tokens = ctx.tokens;
 
-        // Line-based detection for backtick, %x, IO.popen, Open3 (always single-string contexts)
-        for (idx, line) in ctx.lines.iter().enumerate() {
-            let line_no = idx + 1;
-            let trimmed = line.trim();
-
-            // Skip comment lines
-            if trimmed.starts_with('#') {
-                continue;
-            }
-
-            if !line.contains("#{") {
-                continue;
-            }
-
-            // Backtick strings with interpolation
-            if line.contains('`') {
-                diags.push(Diagnostic::new(
-                    ctx.file,
-                    line_no,
-                    1,
-                    "R053",
-                    "Backtick command with string interpolation is a shell injection risk — use array form of `system()` instead",
-                    Severity::Warning,
-                ));
-                continue;
-            }
-
-            // `%x{...}` or `%x(...)` with interpolation
-            if line.contains("%x{") || line.contains("%x(") {
-                diags.push(Diagnostic::new(
-                    ctx.file,
-                    line_no,
-                    1,
-                    "R053",
-                    "`%x{...}` command with string interpolation is a shell injection risk",
-                    Severity::Warning,
-                ));
-                continue;
-            }
+        // Source-level detection for backtick and %x{} / %x() literals.
+        // Handles multi-line strings where `#{` may appear on a different line
+        // than the opening delimiter.
+        for (start_line, kind) in scan_shell_literals(ctx.source) {
+            let msg: &str = if kind == "backtick" {
+                "Backtick command with string interpolation is a shell injection risk — use array form of `system()` instead"
+            } else {
+                "`%x{...}` command with string interpolation is a shell injection risk"
+            };
+            diags.push(Diagnostic::new(
+                ctx.file,
+                start_line,
+                1,
+                "R053",
+                msg,
+                Severity::Warning,
+            ));
         }
 
         // Token-based detection for system/exec/spawn/IO.popen/Open3.xxx:
@@ -372,10 +365,17 @@ impl Rule for ShellInjectionRule {
     }
 }
 
-/// Returns true when the first string-literal argument starting at `start` contains `#{`.
+/// Returns true when the effective command string argument contains `#{`
+/// AND the call is in single-string form (i.e. no comma follows that argument).
+///
 /// Handles both paren form `method("#{x}")` and no-paren form `method "#{x}"`.
-/// Correctly returns false for array forms like `method("safe", "#{x}")` because
-/// the first argument `"safe"` does not contain `#{`.
+/// Returns false for multi-argument array forms (`method("#{x}", "y")`) because
+/// those are passed directly as argv with no shell expansion.
+///
+/// Also handles the Ruby env-hash prefix convention:
+///   `system({"LANG" => "en"}, "cmd #{x}")` — hash literal first arg is env vars
+///   `Open3.capture3(env, "cmd #{x}")`      — ident first arg may be env hash var
+/// In both cases the second argument is the actual shell command.
 fn first_arg_has_interpolation(tokens: &[crate::lexer::Token], start: usize) -> bool {
     let mut j = start;
     while j < tokens.len() && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline) {
@@ -384,6 +384,7 @@ fn first_arg_has_interpolation(tokens: &[crate::lexer::Token], start: usize) -> 
     if j >= tokens.len() {
         return false;
     }
+    // Consume optional opening parenthesis.
     if tokens[j].kind == TokenKind::LParen {
         j += 1;
         while j < tokens.len()
@@ -392,7 +393,236 @@ fn first_arg_has_interpolation(tokens: &[crate::lexer::Token], start: usize) -> 
             j += 1;
         }
     }
-    j < tokens.len() && tokens[j].kind == TokenKind::StringLiteral && tokens[j].text.contains("#{")
+    if j >= tokens.len() {
+        return false;
+    }
+
+    // If the first argument looks like an env hash or env variable, skip it and
+    // advance to the actual command argument.
+    match tokens[j].kind {
+        // Hash literal `{...}` — definitely an env hash.
+        TokenKind::LBrace => {
+            let mut depth = 1usize;
+            j += 1;
+            while j < tokens.len() && depth > 0 {
+                match tokens[j].kind {
+                    TokenKind::LBrace => depth += 1,
+                    TokenKind::RBrace => depth -= 1,
+                    _ => {}
+                }
+                j += 1;
+            }
+            // Require a separating comma before the command argument.
+            while j < tokens.len()
+                && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline)
+            {
+                j += 1;
+            }
+            if j >= tokens.len() || tokens[j].kind != TokenKind::Comma {
+                return false;
+            }
+            j += 1;
+            while j < tokens.len()
+                && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline)
+            {
+                j += 1;
+            }
+        }
+        // Identifier or constant — may be an env hash variable (common with Open3).
+        // Only skip if a comma follows immediately; otherwise fall through.
+        TokenKind::Ident | TokenKind::Constant => {
+            let mut peek = j + 1;
+            while peek < tokens.len()
+                && matches!(
+                    tokens[peek].kind,
+                    TokenKind::Whitespace | TokenKind::Newline
+                )
+            {
+                peek += 1;
+            }
+            if peek < tokens.len() && tokens[peek].kind == TokenKind::Comma {
+                j = peek + 1;
+                while j < tokens.len()
+                    && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline)
+                {
+                    j += 1;
+                }
+            }
+            // If no comma follows, j still points at the original first arg — fall through.
+        }
+        _ => {}
+    }
+
+    // j now points at the argument to inspect.
+    if j >= tokens.len()
+        || tokens[j].kind != TokenKind::StringLiteral
+        || !tokens[j].text.contains("#{")
+    {
+        return false;
+    }
+    // Check whether a comma follows — if so, this is a multi-argument (argv) call
+    // and no shell expansion occurs.
+    let mut k = j + 1;
+    while k < tokens.len() && matches!(tokens[k].kind, TokenKind::Whitespace | TokenKind::Newline) {
+        k += 1;
+    }
+    if k < tokens.len() && tokens[k].kind == TokenKind::Comma {
+        return false; // multi-arg form — safe
+    }
+    true
+}
+
+/// Scan raw source text for backtick and `%x()`/`%x{}` shell literals that
+/// contain string interpolation (`#{`).  Returns `(line_number, kind)` pairs
+/// where `kind` is `"backtick"` or `"percent_x"`.
+///
+/// This source-level scan correctly handles multi-line literals where `#{`
+/// appears on a different line than the opening delimiter.
+fn scan_shell_literals(source: &str) -> Vec<(usize, &'static str)> {
+    let mut results = Vec::new();
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    let mut line = 1usize;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\n' => {
+                line += 1;
+                i += 1;
+            }
+            // Outside a shell literal a bare `#` starts a comment — skip to EOL.
+            b'#' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            // Skip single-quoted strings (no interpolation inside).
+            b'\'' => {
+                i += 1;
+                while i < bytes.len() {
+                    match bytes[i] {
+                        b'\\' => {
+                            i += 2;
+                        }
+                        b'\'' => {
+                            i += 1;
+                            break;
+                        }
+                        b'\n' => {
+                            line += 1;
+                            i += 1;
+                        }
+                        _ => {
+                            i += 1;
+                        }
+                    }
+                }
+            }
+            // Skip double-quoted strings (not a shell command; handled by token scan).
+            b'"' => {
+                i += 1;
+                while i < bytes.len() {
+                    match bytes[i] {
+                        b'\\' => {
+                            i += 2;
+                        }
+                        b'"' => {
+                            i += 1;
+                            break;
+                        }
+                        b'\n' => {
+                            line += 1;
+                            i += 1;
+                        }
+                        _ => {
+                            i += 1;
+                        }
+                    }
+                }
+            }
+            // Backtick shell literal.
+            b'`' => {
+                let start_line = line;
+                i += 1;
+                let mut has_interp = false;
+                while i < bytes.len() {
+                    match bytes[i] {
+                        b'\\' => {
+                            i += 2;
+                            continue;
+                        }
+                        b'`' => {
+                            i += 1;
+                            break;
+                        }
+                        b'\n' => {
+                            line += 1;
+                            i += 1;
+                            continue;
+                        }
+                        b'#' if i + 1 < bytes.len() && bytes[i + 1] == b'{' => {
+                            has_interp = true;
+                            i += 1;
+                        }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                if has_interp {
+                    results.push((start_line, "backtick"));
+                }
+            }
+            // `%x(...)` or `%x{...}` shell literal.
+            b'%' if i + 2 < bytes.len()
+                && bytes[i + 1] == b'x'
+                && (bytes[i + 2] == b'(' || bytes[i + 2] == b'{') =>
+            {
+                let open = bytes[i + 2];
+                let close = if open == b'(' { b')' } else { b'}' };
+                let start_line = line;
+                i += 3;
+                let mut depth = 1usize;
+                let mut has_interp = false;
+                while i < bytes.len() && depth > 0 {
+                    match bytes[i] {
+                        b'\\' => {
+                            i += 2;
+                            continue;
+                        }
+                        b'\n' => {
+                            line += 1;
+                            i += 1;
+                            continue;
+                        }
+                        b'#' if i + 1 < bytes.len() && bytes[i + 1] == b'{' => {
+                            has_interp = true;
+                            // Fall through so the `{` is processed by the depth check below.
+                            i += 1;
+                        }
+                        _ => {}
+                    }
+                    if bytes[i] == open {
+                        depth += 1;
+                    } else if bytes[i] == close {
+                        depth -= 1;
+                        if depth == 0 {
+                            i += 1;
+                            break;
+                        }
+                    }
+                    i += 1;
+                }
+                if has_interp {
+                    results.push((start_line, "percent_x"));
+                }
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    results
 }
 
 // ── R054: Unsafe deserialization (Marshal.load / YAML.load) ──────────────────
@@ -419,17 +649,24 @@ impl Rule for UnsafeDeserializationRule {
                 continue;
             }
 
-            // Next non-whitespace/newline should be `.`
+            // Next non-whitespace/newline should be `.` or `::`
             let mut j = i + 1;
             while j < tokens.len()
                 && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline)
             {
                 j += 1;
             }
-            if j >= tokens.len() || tokens[j].kind != TokenKind::Dot {
+            if j >= tokens.len()
+                || !matches!(tokens[j].kind, TokenKind::Dot | TokenKind::ColonColon)
+            {
                 i += 1;
                 continue;
             }
+            let sep = if tokens[j].kind == TokenKind::ColonColon {
+                "::"
+            } else {
+                "."
+            };
 
             // Next non-whitespace/newline should be `load` (but NOT `safe_load`)
             let mut k = j + 1;
@@ -455,7 +692,7 @@ impl Rule for UnsafeDeserializationRule {
                     tokens[i].line,
                     tokens[i].col,
                     "R054",
-                    format!("`{receiver}.load` deserializes arbitrary objects — {suggestion}"),
+                    format!("`{receiver}{sep}load` deserializes arbitrary objects — {suggestion}"),
                     Severity::Warning,
                 ));
             }
@@ -524,6 +761,38 @@ mod tests {
         // `eval` used as a variable name should not trigger
         let src = "result = some_eval\n";
         assert!(!has_rule(&check_rule(&EvalUsageRule, src), "R050"));
+    }
+
+    // Bug 3: method definitions named `eval` must not be flagged
+    #[test]
+    fn no_violation_eval_def() {
+        let src = "def eval(code)\n  # implementation\nend\n";
+        assert!(
+            !has_rule(&check_rule(&EvalUsageRule, src), "R050"),
+            "{:?}",
+            check_rule(&EvalUsageRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_instance_eval_def() {
+        let src = "def instance_eval(arg)\n  # ...\nend\n";
+        assert!(
+            !has_rule(&check_rule(&EvalUsageRule, src), "R050"),
+            "{:?}",
+            check_rule(&EvalUsageRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_eval_alias() {
+        // alias statement: `eval` appears as a name, not a call
+        let src = "alias eval original_eval\n";
+        assert!(
+            !has_rule(&check_rule(&EvalUsageRule, src), "R050"),
+            "{:?}",
+            check_rule(&EvalUsageRule, src)
+        );
     }
 
     // --- R051: hardcoded credentials ---
@@ -720,6 +989,37 @@ mod tests {
         assert!(!has_rule(&check_rule(&DynamicSendRule, src), "R052"));
     }
 
+    // Bug: static string literal is not dynamic — must not be flagged
+    #[test]
+    fn no_violation_send_static_string_literal() {
+        let src = "obj.send(\"foo\")\n";
+        assert!(
+            !has_rule(&check_rule(&DynamicSendRule, src), "R052"),
+            "{:?}",
+            check_rule(&DynamicSendRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_public_send_static_string_literal() {
+        let src = "obj.public_send(\"bar\")\n";
+        assert!(
+            !has_rule(&check_rule(&DynamicSendRule, src), "R052"),
+            "{:?}",
+            check_rule(&DynamicSendRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_receiverless_send_static_string_no_parens() {
+        let src = "send \"foo\"\n";
+        assert!(
+            !has_rule(&check_rule(&DynamicSendRule, src), "R052"),
+            "{:?}",
+            check_rule(&DynamicSendRule, src)
+        );
+    }
+
     // --- R053: shell injection ---
 
     #[test]
@@ -795,6 +1095,67 @@ mod tests {
         assert!(!has_rule(&check_rule(&ShellInjectionRule, src), "R053"));
     }
 
+    // Bug 1: Open3 multi-arg form with interpolated first arg should NOT be flagged
+    #[test]
+    fn no_violation_open3_interpolated_first_arg_multiarg_form() {
+        // "#{git_bin}" is first arg but multiple args → argv form, no shell expansion
+        let src = "Open3.capture3(\"#{git_bin}\", \"show\", ref)\n";
+        assert!(
+            !has_rule(&check_rule(&ShellInjectionRule, src), "R053"),
+            "{:?}",
+            check_rule(&ShellInjectionRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_system_interpolated_first_arg_multiarg_form() {
+        let src = "system(\"#{git_bin}\", \"show\", ref)\n";
+        assert!(
+            !has_rule(&check_rule(&ShellInjectionRule, src), "R053"),
+            "{:?}",
+            check_rule(&ShellInjectionRule, src)
+        );
+    }
+
+    // Bug 2: multi-line %x with interpolation on a different line must be detected
+    #[test]
+    fn violation_percent_x_multiline_interpolation() {
+        let src = "cmd = %x(\n  git show #{ref}\n)\n";
+        assert!(
+            has_rule(&check_rule(&ShellInjectionRule, src), "R053"),
+            "{:?}",
+            check_rule(&ShellInjectionRule, src)
+        );
+    }
+
+    // Bug: env hash / env variable as first arg must not hide dangerous second arg
+    #[test]
+    fn violation_system_env_hash_interpolated_command() {
+        let src = "system({\"LANG\" => \"en_US\"}, \"rm -rf #{path}\")\n";
+        assert!(
+            has_rule(&check_rule(&ShellInjectionRule, src), "R053"),
+            "{:?}",
+            check_rule(&ShellInjectionRule, src)
+        );
+    }
+
+    #[test]
+    fn violation_open3_env_var_interpolated_command() {
+        let src = "Open3.capture3(env, \"git show #{ref}\")\n";
+        assert!(
+            has_rule(&check_rule(&ShellInjectionRule, src), "R053"),
+            "{:?}",
+            check_rule(&ShellInjectionRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_system_env_hash_safe_command() {
+        // Env hash present but no interpolation in command → safe
+        let src = "system({\"LANG\" => \"en_US\"}, \"ls /tmp\")\n";
+        assert!(!has_rule(&check_rule(&ShellInjectionRule, src), "R053"));
+    }
+
     // --- R054: unsafe deserialization ---
 
     #[test]
@@ -838,6 +1199,27 @@ mod tests {
     #[test]
     fn violation_marshal_load_multiline() {
         let src = "obj = Marshal.\n  load(data)\n";
+        assert!(
+            has_rule(&check_rule(&UnsafeDeserializationRule, src), "R054"),
+            "{:?}",
+            check_rule(&UnsafeDeserializationRule, src)
+        );
+    }
+
+    // Bug: YAML::load and Marshal::load (ColonColon) must be detected
+    #[test]
+    fn violation_yaml_coloncolon_load() {
+        let src = "data = YAML::load(input)\n";
+        assert!(
+            has_rule(&check_rule(&UnsafeDeserializationRule, src), "R054"),
+            "{:?}",
+            check_rule(&UnsafeDeserializationRule, src)
+        );
+    }
+
+    #[test]
+    fn violation_marshal_coloncolon_load() {
+        let src = "obj = Marshal::load(data)\n";
         assert!(
             has_rule(&check_rule(&UnsafeDeserializationRule, src), "R054"),
             "{:?}",
