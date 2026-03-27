@@ -4,11 +4,13 @@
 /// into an AST node, used by AST-based linting rules.
 pub use lib_ruby_parser::Node;
 
-use lib_ruby_parser::{Parser, ParserOptions};
+use lib_ruby_parser::{ErrorLevel, Parser, ParserOptions};
 
 /// Parse Ruby source code and return the root AST node.
 ///
-/// Returns `None` when the parser produces no AST (e.g. empty source).
+/// Returns `None` when the parser produces no AST (e.g. empty source)
+/// or when error-level diagnostics are present (syntax errors), to avoid
+/// running AST rules on partial/invalid trees.
 pub fn parse(source: &str) -> Option<Node> {
     let options = ParserOptions {
         buffer_name: "(input)".to_string(),
@@ -16,6 +18,13 @@ pub fn parse(source: &str) -> Option<Node> {
     };
     let parser = Parser::new(source.as_bytes().to_vec(), options);
     let result = parser.do_parse();
+    if result
+        .diagnostics
+        .iter()
+        .any(|d| d.level == ErrorLevel::Error)
+    {
+        return None;
+    }
     result.ast.map(|boxed| *boxed)
 }
 
@@ -43,10 +52,17 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_syntax_does_not_panic() {
-        // Invalid syntax should not panic; it may return Some or None
-        // depending on how much the parser can recover.
-        let _result = parse("def end end end @@@ !!!");
+    fn test_invalid_syntax_returns_none() {
+        // Invalid syntax with error-level diagnostics must return None
+        // to prevent AST rules from running on partial/invalid trees.
+        let result = parse("def end end end @@@ !!!");
+        assert!(result.is_none(), "parse with errors should return None");
+    }
+
+    #[test]
+    fn test_parse_invalid_def_returns_none() {
+        let result = parse("def def def");
+        assert!(result.is_none(), "invalid def should return None");
     }
 
     #[test]
