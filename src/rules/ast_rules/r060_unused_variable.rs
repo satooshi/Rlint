@@ -31,7 +31,9 @@ impl Rule for UnusedVariableRule {
             scopes: Vec::new(),
             diagnostics: Vec::new(),
         };
+        visitor.enter_scope(); // root scope for top-level locals
         visitor.visit(ast);
+        visitor.exit_scope(); // emit diagnostics for unused top-level locals
 
         // Sort by line for deterministic output
         visitor.diagnostics.sort_by_key(|d| d.line);
@@ -84,8 +86,17 @@ impl<'a> VariableVisitor<'a> {
     }
 
     fn record_assignment(&mut self, name: &str, loc: Loc) {
+        // In Ruby, assignment inside a block rebinds an outer local if one exists.
+        // Walk outer scopes first; only create a new entry in the innermost scope
+        // if no outer binding is found.
+        for scope in self.scopes.iter_mut().rev() {
+            if scope.contains_key(name) {
+                // Rebinding outer variable — don't create a new entry
+                return;
+            }
+        }
+        // No existing binding found — create new entry in innermost scope
         if let Some(scope) = self.scopes.last_mut() {
-            // Only track the first assignment; or_insert keeps earlier entry intact.
             scope.entry(name.to_string()).or_insert((loc, false));
         }
     }
@@ -243,6 +254,29 @@ mod tests {
         assert!(
             diags.is_empty(),
             "x used in block should not trigger: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn block_reassignment_does_not_false_positive() {
+        let src = "def foo\n  x = 1\n  [1].each do\n    x = 2\n  end\n  puts x\nend\n";
+        let diags = check(src);
+        assert!(
+            diags.is_empty(),
+            "x rebind in block should not false positive: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn detects_unused_top_level_local() {
+        let src = "# frozen_string_literal: true\nx = 1\nputs 42\n";
+        let diags = check(src);
+        let r060: Vec<_> = diags.iter().filter(|d| d.rule == "R060").collect();
+        assert!(
+            !r060.is_empty(),
+            "top-level unused x should be detected: {:?}",
             diags
         );
     }
