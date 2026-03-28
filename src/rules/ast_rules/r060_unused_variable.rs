@@ -1,9 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use lib_ruby_parser::nodes::{Arg, Blockarg, Kwarg, Kwoptarg, Lvar, Lvasgn, Optarg, Restarg};
+use lib_ruby_parser::nodes::{
+    Arg, Block, Blockarg, Def, Defs, Kwarg, Kwoptarg, Kwrestarg, Lvar, Lvasgn, Optarg, Restarg,
+};
 use lib_ruby_parser::traverse::visitor::{
-    visit_arg, visit_blockarg, visit_kwarg, visit_kwoptarg, visit_lvar, visit_lvasgn, visit_optarg,
-    visit_restarg, Visitor,
+    visit_arg, visit_block, visit_blockarg, visit_def, visit_defs, visit_kwarg, visit_kwoptarg,
+    visit_kwrestarg, visit_lvar, visit_lvasgn, visit_optarg, visit_restarg, Visitor,
 };
 use lib_ruby_parser::Loc;
 
@@ -23,42 +25,24 @@ impl Rule for UnusedVariableRule {
             None => return Vec::new(),
         };
 
-        let mut collector = VariableCollector {
-            source: ctx.source.as_bytes(),
-            assignments: HashMap::new(),
-            used: HashSet::new(),
+        let mut visitor = VariableVisitor {
+            source: ctx.source,
+            file: ctx.file,
+            scopes: Vec::new(),
+            diagnostics: Vec::new(),
         };
-        collector.visit(ast);
-
-        let mut diagnostics = Vec::new();
-        for (name, loc) in &collector.assignments {
-            // Skip underscore-prefixed variables (Ruby convention for intentionally unused)
-            if name.starts_with('_') {
-                continue;
-            }
-            if !collector.used.contains(name.as_str()) {
-                let line = byte_offset_to_line(collector.source, loc.begin);
-                diagnostics.push(Diagnostic::new(
-                    ctx.file,
-                    line,
-                    0,
-                    "R060",
-                    format!("Variable `{}` is assigned but never used", name),
-                    Severity::Warning,
-                ));
-            }
-        }
+        visitor.visit(ast);
 
         // Sort by line for deterministic output
-        diagnostics.sort_by_key(|d| d.line);
-        diagnostics
+        visitor.diagnostics.sort_by_key(|d| d.line);
+        visitor.diagnostics
     }
 }
 
 /// Convert a byte offset to a 1-based line number.
-fn byte_offset_to_line(source: &[u8], offset: usize) -> usize {
+fn byte_offset_to_line(source: &str, offset: usize) -> usize {
     let mut line = 1;
-    for &b in &source[..offset.min(source.len())] {
+    for &b in &source.as_bytes()[..offset.min(source.len())] {
         if b == b'\n' {
             line += 1;
         }
@@ -66,73 +50,126 @@ fn byte_offset_to_line(source: &[u8], offset: usize) -> usize {
     line
 }
 
-struct VariableCollector<'a> {
-    source: &'a [u8],
-    /// Map from variable name to the location of its first assignment.
-    /// We only track the first assignment for the diagnostic location.
-    assignments: HashMap<String, Loc>,
-    /// Set of variable names that have been referenced.
-    used: HashSet<String>,
+/// Scope-aware visitor that tracks variable assignments and usages per scope.
+/// Each scope maps variable names to (location, was_used).
+struct VariableVisitor<'a> {
+    source: &'a str,
+    file: &'a str,
+    /// Stack of scopes. Each scope: map of name -> (loc, was_used).
+    scopes: Vec<HashMap<String, (Loc, bool)>>,
+    diagnostics: Vec<Diagnostic>,
 }
 
-impl<'a> Visitor for VariableCollector<'a> {
+impl<'a> VariableVisitor<'a> {
+    fn enter_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    fn exit_scope(&mut self) {
+        if let Some(scope) = self.scopes.pop() {
+            for (name, (loc, used)) in scope {
+                if !used && !name.starts_with('_') {
+                    let line = byte_offset_to_line(self.source, loc.begin);
+                    self.diagnostics.push(Diagnostic::new(
+                        self.file,
+                        line,
+                        1,
+                        "R060",
+                        format!("Variable `{}` is assigned but never used", name),
+                        Severity::Warning,
+                    ));
+                }
+            }
+        }
+    }
+
+    fn record_assignment(&mut self, name: &str, loc: Loc) {
+        if let Some(scope) = self.scopes.last_mut() {
+            // Only track the first assignment; or_insert keeps earlier entry intact.
+            scope.entry(name.to_string()).or_insert((loc, false));
+        }
+    }
+
+    fn record_usage(&mut self, name: &str) {
+        // Walk all scopes from innermost outward to find the binding.
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(entry) = scope.get_mut(name) {
+                entry.1 = true;
+                return;
+            }
+        }
+    }
+}
+
+impl<'a> Visitor for VariableVisitor<'a> {
+    fn on_def(&mut self, node: &Def) {
+        self.enter_scope();
+        visit_def(self, node);
+        self.exit_scope();
+    }
+
+    fn on_defs(&mut self, node: &Defs) {
+        self.enter_scope();
+        visit_defs(self, node);
+        self.exit_scope();
+    }
+
+    fn on_block(&mut self, node: &Block) {
+        self.enter_scope();
+        visit_block(self, node);
+        self.exit_scope();
+    }
+
     fn on_lvasgn(&mut self, node: &Lvasgn) {
-        self.assignments
-            .entry(node.name.clone())
-            .or_insert(node.expression_l);
-        // Continue visiting child nodes (e.g. the assigned value may contain references)
+        self.record_assignment(&node.name.clone(), node.expression_l);
+        // Continue visiting child nodes (e.g. the assigned value may contain references).
         visit_lvasgn(self, node);
     }
 
     fn on_lvar(&mut self, node: &Lvar) {
-        self.used.insert(node.name.clone());
+        self.record_usage(&node.name.clone());
         visit_lvar(self, node);
     }
 
     fn on_arg(&mut self, node: &Arg) {
-        self.assignments
-            .entry(node.name.clone())
-            .or_insert(node.expression_l);
+        self.record_assignment(&node.name.clone(), node.expression_l);
         visit_arg(self, node);
     }
 
     fn on_optarg(&mut self, node: &Optarg) {
-        self.assignments
-            .entry(node.name.clone())
-            .or_insert(node.expression_l);
+        self.record_assignment(&node.name.clone(), node.expression_l);
         visit_optarg(self, node);
     }
 
     fn on_blockarg(&mut self, node: &Blockarg) {
         if let Some(name) = &node.name {
-            self.assignments
-                .entry(name.clone())
-                .or_insert(node.expression_l);
+            self.record_assignment(name, node.expression_l);
         }
         visit_blockarg(self, node);
     }
 
     fn on_restarg(&mut self, node: &Restarg) {
         if let Some(name) = &node.name {
-            self.assignments
-                .entry(name.clone())
-                .or_insert(node.expression_l);
+            self.record_assignment(name, node.expression_l);
         }
         visit_restarg(self, node);
     }
 
     fn on_kwarg(&mut self, node: &Kwarg) {
-        self.assignments
-            .entry(node.name.clone())
-            .or_insert(node.expression_l);
+        self.record_assignment(&node.name.clone(), node.expression_l);
         visit_kwarg(self, node);
     }
 
     fn on_kwoptarg(&mut self, node: &Kwoptarg) {
-        self.assignments
-            .entry(node.name.clone())
-            .or_insert(node.expression_l);
+        self.record_assignment(&node.name.clone(), node.expression_l);
         visit_kwoptarg(self, node);
+    }
+
+    fn on_kwrestarg(&mut self, node: &Kwrestarg) {
+        if let Some(name) = &node.name {
+            self.record_assignment(name, node.expression_l);
+        }
+        visit_kwrestarg(self, node);
     }
 }
 
@@ -141,7 +178,7 @@ mod tests {
     use super::*;
     use crate::lexer::Lexer;
 
-    fn run_rule(source: &str) -> Vec<Diagnostic> {
+    fn check(source: &str) -> Vec<Diagnostic> {
         let lines: Vec<&str> = source.lines().collect();
         let tokens = Lexer::new(source).tokenize();
         let ctx = LintContext::new("test.rb", source, &lines, &tokens);
@@ -150,27 +187,63 @@ mod tests {
 
     #[test]
     fn detects_unused_variable() {
-        let diags = run_rule("def foo\n  unused = 1\nend\n");
+        let diags = check("def foo\n  unused = 1\nend\n");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("unused"));
     }
 
     #[test]
     fn no_warning_for_used_variable() {
-        let diags = run_rule("def foo\n  x = 1\n  puts x\nend\n");
+        let diags = check("def foo\n  x = 1\n  puts x\nend\n");
         assert_eq!(diags.len(), 0);
     }
 
     #[test]
     fn ignores_underscore_prefixed() {
-        let diags = run_rule("def foo\n  _unused = 1\nend\n");
+        let diags = check("def foo\n  _unused = 1\nend\n");
         assert_eq!(diags.len(), 0);
     }
 
     #[test]
     fn detects_unused_method_param() {
-        let diags = run_rule("def foo(a, b)\n  puts a\nend\n");
+        let diags = check("def foo(a, b)\n  puts a\nend\n");
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("b"));
+    }
+
+    #[test]
+    fn ignores_used_kwrestarg() {
+        let diags = check("def foo(**opts)\n  puts opts\nend\n");
+        assert!(
+            diags.is_empty(),
+            "used **opts should not trigger: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn detects_unused_kwrestarg() {
+        let diags = check("def foo(**opts)\n  puts 'nothing'\nend\n");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("opts"));
+    }
+
+    #[test]
+    fn scope_isolation_different_methods() {
+        // x used in foo should not prevent x from being flagged as unused in bar
+        let diags = check("def foo\n  x = 1\n  puts x\nend\ndef bar\n  x = 2\nend\n");
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("x"));
+    }
+
+    #[test]
+    fn block_closure_can_use_outer_variable() {
+        // x assigned in outer method, used inside a block closure — should not warn
+        let diags = check("def foo\n  x = 1\n  [1].each { puts x }\nend\n");
+        assert!(
+            diags.is_empty(),
+            "x used in block should not trigger: {:?}",
+            diags
+        );
     }
 }
